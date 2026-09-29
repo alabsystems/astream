@@ -16,7 +16,10 @@
 //!   isolate "delivery is on the write path" from "this machine has fewer cores than
 //!   subscribers". Fan-out done on, or synchronized with, the commit path costs the
 //!   producer once per observer and collapses this toward `1/SUBS_LOW`. Below
-//!   `MIN_INGEST_RATIO` the bench exits 2 — the run fails, not just a metric.
+//!   0.5 the claim `broker.bench.fanout-ingest-ratio` fails. It is gated by that claim, not
+//!   by an exit here: a ratio of two single samples is a TIMING measurement, and the evidence
+//!   runner re-measures a bench that misses its bound (best of `BENCH_ATTEMPTS`), which a hard
+//!   `exit` inside the bench would bypass.
 //! * `broker_fanout_ingest_ratio_full` — the same ratio at the full `SUBS`. REPORTED,
 //!   NOT GATED, and it is not a structural signal: broker, writer and all `SUBS`
 //!   subscribers are threads of THIS process, so past the core count it measures a
@@ -31,13 +34,6 @@ use astream_broker::{Broker, Client};
 use std::sync::mpsc;
 #[cfg(unix)]
 use std::time::Instant;
-
-/// Ingest with `SUBS_LOW` live subscribers must keep at least this share of its own
-/// no-subscriber rate in the SAME run. A fan-out paid for on the write path would
-/// divide the producer's rate by the observer count (0.25 at four); the observed
-/// ratio is near 1, so this sits far from both.
-#[cfg(unix)]
-const MIN_INGEST_RATIO: f64 = 0.5;
 
 #[cfg(unix)]
 fn env(k: &str, d: u64) -> u64 {
@@ -173,12 +169,9 @@ fn main() {
     );
     let _ = std::fs::remove_file(&log);
 
-    if ratio < MIN_INGEST_RATIO {
-        eprintln!(
-            "FAIL: ingest ratio {ratio:.3} < {MIN_INGEST_RATIO} with only {low} subscribers — \
-             the fan-out is being paid for on the write path"
-        );
-        drop(tmp);
-        std::process::exit(2);
-    }
+    // The ingest ratio is gated by the manifest claim `broker.bench.fanout-ingest-ratio`
+    // (min 0.5), not here: see the module docs. A fan-out paid for on the write path would
+    // divide the producer's rate by the observer count (0.25 at four); the observed ratio is
+    // near 1, so the floor sits far from both.
+    drop(tmp);
 }

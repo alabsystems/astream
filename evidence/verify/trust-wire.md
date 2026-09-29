@@ -13,7 +13,7 @@ function in `crates/astream-wire/src/`, never a copy of it.
 
 **What this is not.** It is an **attached, re-runnable artifact, not a `make ci` claim**:
 Trust is a separately built toolchain and never a workspace dependency, so its state can never
-break the substrate build (the kafka2 failure the gate's `verify-isolation` lint forbids). No
+break the substrate build (the predecessor's failure the gate's `verify-isolation` lint forbids). No
 manifest claim asserts anything in this file; `wire.frame.panic-safe` points here and says so.
 
 **Re-run.** `scripts/verify-trust.sh` — exit code **is** the verdict: `0` the crate builds under

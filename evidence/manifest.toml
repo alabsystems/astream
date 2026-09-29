@@ -345,18 +345,42 @@ min_value = 20000.0
 [[claim]]
 id = "broker.bench.last-floor"
 kind = "bench"
-text = "The Last retained-state query holds a throughput floor over 10 000 subjects with 200 000 records of history (20 per subject), queried as 4096-row pages under a wildcard filter, every measured query returning a full page (a short page exits 2). The absolute floor catches a per-query walk of the history (~50x the work of the index range scan). Two same-run ratio gates also exit 2: a 64-row page must be at least 8x cheaper than a 4096-row page (catching a scan of the whole history or subject index), and durable publish throughput on a second connection while queries run must stay at or above 0.25 of idle (catching a query holding the log lock throughout). These are single-machine rates and ratios: they do not bound the lock hold within a page, report no latency percentile, and a correct implementation on much slower hardware could approach the floor."
+text = "The Last retained-state query holds a throughput floor over 10 000 subjects with 200 000 records of history (20 per subject), queried as 4096-row pages under a wildcard filter, every measured query returning a full page (a short page exits 2). The absolute floor catches a per-query walk of the history (~50x the work of the index range scan). Two same-run ratios are gated by their own claims, `broker.bench.last-page-cost-ratio` and `broker.bench.last-ingest-ratio`. These are single-machine rates and ratios: they do not bound the lock hold within a page, report no latency percentile, and a correct implementation on much slower hardware could approach the floor."
 command = "SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench"
 metric = "broker_last_queries_per_sec"
 min_value = 20.0
 
 [[claim]]
+id = "broker.bench.last-page-cost-ratio"
+kind = "bench"
+text = "A Last query costs what the page it returns costs: a 64-row page must run at least 8x faster than a 4096-row page (`broker_last_page_cost_ratio`; the ideal is 64x). A query that walked the whole history or the whole subject index would cost the same at either size and drive this toward 1, so 8 gates that structural regression and not the fixed per-request cost. Two same-run samples, so like every bench floor it is re-measured up to BENCH_ATTEMPTS times keeping the best sample; a real regression depresses every one. A claim of its own, not an exit inside the bench, so the re-measurement applies."
+command = "SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench"
+metric = "broker_last_page_cost_ratio"
+min_value = 8.0
+
+[[claim]]
+id = "broker.bench.last-ingest-ratio"
+kind = "bench"
+text = "A Last query does not park the writer: durable publish throughput on a second connection while queries run must stay at or above 0.25 of the same run's idle rate (`broker_last_ingest_ratio`; observed near 1, since a query holds the log lock only long enough to clone a page of `Arc`s). A query holding the log lock for its whole duration would collapse it. Two same-run samples, so it is re-measured up to BENCH_ATTEMPTS times keeping the best sample; a real regression depresses every one. A claim of its own, not an exit inside the bench, so the re-measurement applies."
+command = "SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench"
+metric = "broker_last_ingest_ratio"
+min_value = 0.25
+
+[[claim]]
 id = "broker.bench.fanout-floor"
 kind = "bench"
-text = "Live fan-out holds a delivery floor: 64 subscribers attached to one filter before 20 000 records are published must each receive every record at its exact dense offset (a gap or short count exits 2). The absolute floor catches only a catastrophic (~10x) egress collapse and is a whole-process rate, since broker, writer and all subscribers share the process. A same-run ratio gate also exits 2: durable publish throughput with four live subscribers must stay at or above 0.5 of that with none, showing delivery is off the commit path. The same ratio at all 64 subscribers is reported but not gated; observers are not free, and the broker's cost is not separated from the co-hosted subscribers'."
+text = "Live fan-out holds a delivery floor: 64 subscribers attached to one filter before 20 000 records are published must each receive every record at its exact dense offset (a gap or short count exits 2). The absolute floor catches only a catastrophic (~10x) egress collapse and is a whole-process rate, since broker, writer and all subscribers share the process. The same-run ingest ratio at four subscribers is gated by its own claim, `broker.bench.fanout-ingest-ratio`. The same ratio at all 64 subscribers is reported but not gated; observers are not free, and the broker's cost is not separated from the co-hosted subscribers'."
 command = "SUBS=64 BENCH_N=20000 cargo run --quiet --release --locked -p astream-broker --example broker_fanout_bench"
 metric = "broker_fanout_deliveries_per_sec"
 min_value = 40000.0
+
+[[claim]]
+id = "broker.bench.fanout-ingest-ratio"
+kind = "bench"
+text = "Delivery is off the commit path: durable publish throughput with four live subscribers must stay at or above 0.5 of the same run's throughput with none (`broker_fanout_ingest_ratio`). Fan-out done on, or synchronized with, the commit path costs the producer once per observer and divides this toward 1/4, so 0.5 gates that structural regression from both sides. The ratio is two single samples taken back to back, so machine contention can depress it with no regression at all (it slows one leg and not the other); like every bench floor it is re-measured up to BENCH_ATTEMPTS times keeping the best sample, and a real regression depresses every sample. It is a claim of its own, not an exit inside the bench, because a hard exit would bypass that re-measurement."
+command = "SUBS=64 BENCH_N=20000 cargo run --quiet --release --locked -p astream-broker --example broker_fanout_bench"
+metric = "broker_fanout_ingest_ratio"
+min_value = 0.5
 
 [[claim]]
 id = "broker.relaxed-tier"

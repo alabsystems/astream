@@ -1,7 +1,7 @@
-//! The merge gate. Each lint maps to a confirmed kafka2 failure mode and
+//! The merge gate. Each lint maps to a confirmed failure mode of the predecessor and
 //! turns it into a hard, machine-checkable rejection:
 //!
-//! * `no-git-deps`        — kafka2 pinned 404 git revisions; the public repo
+//! * `no-git-deps`        — the predecessor pinned 404 git revisions; the public repo
 //!   would not build. astream forbids git dependencies — in every dependency
 //!   table, in `[patch]` / `[replace]` redirects, and as a `git+` source in
 //!   `Cargo.lock` (the ground truth for what cargo fetches).
@@ -12,7 +12,7 @@
 //! * `drift-marker`       — incomplete / session-drift checkpoints landed on
 //!   main. Those markers, and unlinked task notes, are
 //!   rejected.
-//! * `tautology`          — kafka2 had "proofs" of `8 + 4 + 4 == 16`. A test
+//! * `tautology`          — the predecessor had "proofs" of `8 + 4 + 4 == 16`. A test
 //!   whose every assertion is a constant expression is
 //!   rejected.
 //! * `verify-isolation`   — verification tooling broke the substrate build.
@@ -20,7 +20,7 @@
 //! * `doc-tamper`         — the README cited a status file that did not exist.
 //!   The generated evidence block must match the
 //!   manifest render exactly.
-//! * `manifest-integrity` — kafka2 counted decorative "proofs" as rigor and
+//! * `manifest-integrity` — the predecessor counted decorative "proofs" as rigor and
 //!   cited an evidence file that did not exist. A claim
 //!   backed by a known no-op program (a denylist:
 //!   `true`, `:`, `echo`, `printf`, `cat`, `head`,
@@ -481,7 +481,7 @@ fn lint_undeclared_cfg(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
                     path: rel(root, f),
                     detail: format!(
                         "cfg references undeclared feature {name:?} (not in the crate's Cargo.toml) \
-                         — the class of bug that dead-coded a whole kafka2 module"
+                         — the class of bug that dead-coded a whole module of the predecessor"
                     ),
                 });
             }
@@ -842,7 +842,7 @@ fn lint_verify_isolation(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
     // (2) cargo also compiles PATH dependencies of substrate crates, so a
     // `verify-* = { path = "../verify-*" }` edge enters the build graph without
     // being a workspace member — the most natural way to reintroduce the exact
-    // kafka2 failure. Scan every manifest's dependency tables.
+    // predecessor failure. Scan every manifest's dependency tables.
     for f in files.iter().filter(|f| is_cargo_manifest(f)) {
         let text = read_text_lossy(f);
         let val = match text.parse::<toml::Value>() {
@@ -942,7 +942,7 @@ fn lint_doc_tamper(root: &Path) -> Vec<Violation> {
 // --- manifest-integrity ---------------------------------------------------
 
 /// Programs that exit zero without exercising any project artifact. A claim
-/// backed by one of these is decorative "evidence" — the kafka2 failure where
+/// backed by one of these is decorative "evidence" — the predecessor's failure where
 /// a confident claim sits atop a command that proves nothing. The file-dump
 /// tools (`cat`/`head`/`tail`) are here too: echoing a committed golden file
 /// hashes green while running none of the product code the claim describes.
@@ -1251,7 +1251,7 @@ mod tests {
 
     #[test]
     fn constant_only_assertions_are_recognised() {
-        // The kafka2 form, the laundered suffix form, and a bool-only assert.
+        // The predecessor's form, the laundered suffix form, and a bool-only assert.
         assert!(inner_is_constant("8 + 4 + 4, 16"));
         assert!(inner_is_constant("8u8 + 4u8 + 4u8, 16u8"));
         assert!(inner_is_constant("true"));

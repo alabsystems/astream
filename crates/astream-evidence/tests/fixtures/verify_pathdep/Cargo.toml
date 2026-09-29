@@ -1,6 +1,6 @@
 # INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
 # A verify* crate pulled in as a PATH dependency — it enters the substrate
-# build graph without being a workspace member, the exact kafka2 failure the
+# build graph without being a workspace member, the exact predecessor failure the
 # member-only check missed.
 [package]
 name = "fx-substrate"

@@ -129,11 +129,17 @@ fn a_fork_snapshot_across_chunks_is_the_whole_counterfactual_history() {
         .unwrap()
         .fork_subscribe(fork_at, "/t/odd", b"replaced", "/t/>")
         .unwrap();
-    // Records that land after the fork's head are not part of its snapshot.
+    // Records that land after the fork's head is PINNED are not part of its snapshot. The head
+    // is pinned by the broker's connection thread on its first read, and `fork_subscribe`
+    // returns without an ack, so how many of these ten land below the pin depends on how the
+    // scheduler orders that thread against this one: the snapshot must be exactly the records
+    // below WHICHEVER head it reports (the end marker carries it), and that head can only be
+    // one of N..=N+10. (Asserting the head is exactly N made this test fail under load: one
+    // record won the race, 10001 for 10000.)
     fill(&sock, N, N + 10);
 
     let mut got = 0u64;
-    loop {
+    let pinned = loop {
         match fork.recv_event().unwrap() {
             Some(Event::Delivery {
                 offset: off,
@@ -155,13 +161,20 @@ fn a_fork_snapshot_across_chunks_is_the_whole_counterfactual_history() {
                 got += 1;
             }
             Some(Event::Mark { next, head }) => {
-                assert_eq!((next, head), (N, N));
-                break;
+                assert_eq!(next, head, "a snapshot's next is its pinned head");
+                break head;
             }
             None => panic!("the fork ended without its end marker"),
         }
-    }
-    assert_eq!(got, N, "the snapshot is every record below its head");
+    };
+    assert!(
+        (N..=N + 10).contains(&pinned),
+        "the pinned head {pinned} is a head the log had once the fork was asked for"
+    );
+    assert_eq!(
+        got, pinned,
+        "the snapshot is every record below its pinned head, and no other"
+    );
 
     drop(fork);
     h.shutdown();

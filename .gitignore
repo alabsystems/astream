@@ -5,3 +5,6 @@
 **/*.rs.bk
 .DS_Store
 # Cargo.lock is COMMITTED on purpose — reproducible builds are the thesis.
+
+# pub stage's work directory (publication engine); never source.
+/publish/.out/

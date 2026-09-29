@@ -175,7 +175,8 @@ fn tag_hex(grant: &str) -> String {
 #[test]
 fn asb_mint_refuses_a_bare_filter_and_a_secret_on_argv() {
     let p = fresh("mintrefuse");
-    let secret = p.file("secret", "fleet-mint-secret-0123456789abcdef"); // a file is the secret, byte for byte
+    let content = "fleet-mint-secret-0123456789abcdef";
+    let secret = p.file("secret", content); // a file is the secret, byte for byte
 
     // A bare filter is refused, and the message spells both safe alternatives.
     let out = run(&["mint", "/f/F/pub/>", "--secret-file", &secret]);
@@ -232,7 +233,8 @@ fn asb_mint_refuses_a_bare_filter_and_a_secret_on_argv() {
 #[test]
 fn asb_mint_prints_the_capability_line_a_cap_file_holds() {
     let p = fresh("mint");
-    let secret = p.file("secret", "fleet-mint-secret-0123456789abcdef");
+    let content = "fleet-mint-secret-0123456789abcdef";
+    let secret = p.file("secret", content);
 
     for grant in [
         "ro:/f/F/pub/>",

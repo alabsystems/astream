@@ -1,5 +1,5 @@
 # astream — a small, reproducibly-buildable, agent-native message bus.
-# Successor to kafka2. The gate (astream-wire + astream-evidence) is the
+# The gate (astream-wire + astream-evidence) is the
 # foundation; the 13 members below are the built system — see README "Layout".
 #
 # HARD INVARIANT: zero private / git dependencies. Everything resolves from
@@ -46,6 +46,6 @@ proptest = "1.5"
 
 [profile.release]
 # Deliberately NOT panic="abort": astream isolates faults per-connection and
-# wants to unwind one task rather than kill the node (a kafka2 lesson).
+# wants to unwind one task rather than kill the node (a predecessor lesson).
 lto = true
 codegen-units = 1

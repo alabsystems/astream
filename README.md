@@ -1,6 +1,6 @@
 # astream
 
-A small, reproducibly-buildable, agent-native message bus. The successor to kafka2.
+A small, reproducibly-buildable, agent-native message bus.
 
 - **License:** Apache-2.0
 - **Status:** 13 crates. Every claim in
@@ -12,12 +12,12 @@ A small, reproducibly-buildable, agent-native message bus. The successor to kafk
   capability enforcement on the accept path, with expiry; opt-in encrypt-at-rest,
   anti-rollback and retention for the durable log; a live PTY host; a pump that
   wakes a turn-based agent on semantic boundaries from any subject, off a
-  broker-durable cursor; and two CLIs (`asb`, `aspump`). Open work is in
-  [`docs/ROADMAP.md`](docs/ROADMAP.md).
+  broker-durable cursor; and two CLIs (`asb`, `aspump`). Open work is listed in the
+  development roadmap.
 
 ## Why this exists
 
-astream is a deliberate response to a skeptical audit of **kafka2**, a
+astream is a deliberate response to a skeptical audit of its predecessor, a
 252,000-line message bus built by an autonomous agent swarm. The audit's
 verdict: the *code* was largely competent, but the *process* failed — it
 shipped an artifact that did not build from a clean checkout, cited an evidence
@@ -34,14 +34,14 @@ every later increment is gated by:
 2. **Docs are generated from evidence.** The claims table below is produced by
    `astream-evidence render` from [`evidence/manifest.toml`](evidence/manifest.toml).
    A claim physically cannot cite an artifact the harness does not produce.
-3. **The merge gate makes kafka2's failures un-mergeable.** `astream-evidence
+3. **The merge gate makes the predecessor's failures un-mergeable.** `astream-evidence
    gate` rejects: git dependencies, cfg references to undeclared features
    (the dead-code-by-typo class), incomplete / session-drift checkpoint
    markers, unlinked task notes, constant-only tests, a stale generated README,
    and any verification crate wired into the substrate workspace.
 
 The thesis, architecture, and performance doctrine live in
-[`docs/DOCTRINE.md`](docs/DOCTRINE.md): determinism as a replay substrate, the
+the development doctrine: determinism as a replay substrate, the
 Pareto rule (never worse on a measured axis), the durability dial, and the
 benchmark-regression gate. Performance is a labeled durability *dial*, not a
 fixed posture; "never worse on a measured axis" is enforced by `bench`-kind
@@ -95,7 +95,7 @@ runs as a MIR pass during compilation) is an **attached survey, not a claim**:
 records the per-function verdict on every auto-generated Level-0 safety obligation
 in [`evidence/verify/trust-wire.md`](evidence/verify/trust-wire.md). Trust is a
 separate toolchain, never a workspace dependency, so a broken verifier can never
-break the substrate build (the exact kafka2 failure); the gate enforces this.
+break the substrate build (the exact predecessor failure); the gate enforces this.
 
 ## Quick start
 
@@ -176,8 +176,11 @@ Every claim below is backed by a command anyone can re-run. Project: `astream`.
 | `broker.pipelining` | One connection keeps many publishes in flight: the broker splits it into a read half that submits to the group-commit writer and an ack-writer thread that streams acks back in order, joined by a bounded queue (PIPELINE_DEPTH) that back-pressures the client so per-connection memory is capped; in-flight publishes share group-commit fsyncs under the same Strict ack-after-fsync guarantee. In-process: 500 publishes pipelined on one connection (window 128) ack in dense request order with no duplicate; re-pipelining the same (producer_id, seq) range dedups to the original offsets; subscribing on the same connection flushes pending acks, then streams the records in offset order; after a restart every acked record is durable and re-delivered in order. Ordering is per-connection; cross-connection order is the writer's single offset spine. | `cargo test --locked -p astream-broker --test pipeline` |
 | `broker.bench.pipeline-floor` | Single-connection pipelining (window 256, each publish awaiting a Strict durable ack) holds a durable-throughput floor far above the one-in-flight rate, failing if it collapses to a fsync round-trip per message. The absolute floor catches that regression only on hosts where an fsync costs milliseconds; with sub-millisecond fsync or a tmpfs log directory the synchronous rate itself clears it, and the gate detects only a catastrophic slowdown. | `WINDOW=256 BENCH_N=5000 cargo run --quiet --release --locked -p astream-broker --example broker_pipeline_bench` |
 | `broker.bench.replay-egress-floor` | The delivery/replay egress path holds a throughput floor: a subscriber replays a 10 000-record backlog of 256-byte bodies from offset 0, with catch-up reads handing out shared Arc records and delivery frames built from the borrowed record, without a deep copy. At BODY=256 the floor allows ~50 us per delivery, so it gates only a catastrophic (~10x) egress slowdown, not a reintroduced per-record copy, which would surface only at large bodies this command does not run. | `BENCH_N=10000 BODY=256 cargo run --quiet --release --locked -p astream-broker --example broker_replay_bench` |
-| `broker.bench.last-floor` | The Last retained-state query holds a throughput floor over 10 000 subjects with 200 000 records of history (20 per subject), queried as 4096-row pages under a wildcard filter, every measured query returning a full page (a short page exits 2). The absolute floor catches a per-query walk of the history (~50x the work of the index range scan). Two same-run ratio gates also exit 2: a 64-row page must be at least 8x cheaper than a 4096-row page (catching a scan of the whole history or subject index), and durable publish throughput on a second connection while queries run must stay at or above 0.25 of idle (catching a query holding the log lock throughout). These are single-machine rates and ratios: they do not bound the lock hold within a page, report no latency percentile, and a correct implementation on much slower hardware could approach the floor. | `SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench` |
-| `broker.bench.fanout-floor` | Live fan-out holds a delivery floor: 64 subscribers attached to one filter before 20 000 records are published must each receive every record at its exact dense offset (a gap or short count exits 2). The absolute floor catches only a catastrophic (~10x) egress collapse and is a whole-process rate, since broker, writer and all subscribers share the process. A same-run ratio gate also exits 2: durable publish throughput with four live subscribers must stay at or above 0.5 of that with none, showing delivery is off the commit path. The same ratio at all 64 subscribers is reported but not gated; observers are not free, and the broker's cost is not separated from the co-hosted subscribers'. | `SUBS=64 BENCH_N=20000 cargo run --quiet --release --locked -p astream-broker --example broker_fanout_bench` |
+| `broker.bench.last-floor` | The Last retained-state query holds a throughput floor over 10 000 subjects with 200 000 records of history (20 per subject), queried as 4096-row pages under a wildcard filter, every measured query returning a full page (a short page exits 2). The absolute floor catches a per-query walk of the history (~50x the work of the index range scan). Two same-run ratios are gated by their own claims, `broker.bench.last-page-cost-ratio` and `broker.bench.last-ingest-ratio`. These are single-machine rates and ratios: they do not bound the lock hold within a page, report no latency percentile, and a correct implementation on much slower hardware could approach the floor. | `SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench` |
+| `broker.bench.last-page-cost-ratio` | A Last query costs what the page it returns costs: a 64-row page must run at least 8x faster than a 4096-row page (`broker_last_page_cost_ratio`; the ideal is 64x). A query that walked the whole history or the whole subject index would cost the same at either size and drive this toward 1, so 8 gates that structural regression and not the fixed per-request cost. Two same-run samples, so like every bench floor it is re-measured up to BENCH_ATTEMPTS times keeping the best sample; a real regression depresses every one. A claim of its own, not an exit inside the bench, so the re-measurement applies. | `SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench` |
+| `broker.bench.last-ingest-ratio` | A Last query does not park the writer: durable publish throughput on a second connection while queries run must stay at or above 0.25 of the same run's idle rate (`broker_last_ingest_ratio`; observed near 1, since a query holds the log lock only long enough to clone a page of `Arc`s). A query holding the log lock for its whole duration would collapse it. Two same-run samples, so it is re-measured up to BENCH_ATTEMPTS times keeping the best sample; a real regression depresses every one. A claim of its own, not an exit inside the bench, so the re-measurement applies. | `SUBJECTS=10000 HISTORY=200000 cargo run --quiet --release --locked -p astream-broker --example broker_last_bench` |
+| `broker.bench.fanout-floor` | Live fan-out holds a delivery floor: 64 subscribers attached to one filter before 20 000 records are published must each receive every record at its exact dense offset (a gap or short count exits 2). The absolute floor catches only a catastrophic (~10x) egress collapse and is a whole-process rate, since broker, writer and all subscribers share the process. The same-run ingest ratio at four subscribers is gated by its own claim, `broker.bench.fanout-ingest-ratio`. The same ratio at all 64 subscribers is reported but not gated; observers are not free, and the broker's cost is not separated from the co-hosted subscribers'. | `SUBS=64 BENCH_N=20000 cargo run --quiet --release --locked -p astream-broker --example broker_fanout_bench` |
+| `broker.bench.fanout-ingest-ratio` | Delivery is off the commit path: durable publish throughput with four live subscribers must stay at or above 0.5 of the same run's throughput with none (`broker_fanout_ingest_ratio`). Fan-out done on, or synchronized with, the commit path costs the producer once per observer and divides this toward 1/4, so 0.5 gates that structural regression from both sides. The ratio is two single samples taken back to back, so machine contention can depress it with no regression at all (it slows one leg and not the other); like every bench floor it is re-measured up to BENCH_ATTEMPTS times keeping the best sample, and a real regression depresses every sample. It is a claim of its own, not an exit inside the bench, because a hard exit would bypass that re-measurement. | `SUBS=64 BENCH_N=20000 cargo run --quiet --release --locked -p astream-broker --example broker_fanout_bench` |
 | `broker.relaxed-tier` | A Relaxed ack means the batch is in the OS page cache (no fsync): it survives a process crash but not power loss; Strict (the default) acks only after fsync. At the Relaxed tier, acked records get a dense in-order offset spine and are delivered in order, a re-sent (producer_id, producer_seq) is deduped to its original offset, and a graceful restart recovers a clean prefix with dedup intact. A Relaxed broker in a child process acks 100 publishes and is SIGKILLed; on reopen every acked record is recovered in order with dedup intact, and a torn tail appended on top is truncated. Recovery truncates only an incomplete or all-zero trailing frame; a complete frame failing its CRC mid-log makes open refuse with InvalidData, leaving the file untouched, and only BrokerLog::open_repair truncates there. Power-loss durability for Relaxed is not claimed. | `cargo test --locked -p astream-broker --test relaxed_tier` |
 | `broker.bench.relaxed-floor` | The Relaxed tier holds a single-producer throughput floor far above the Strict rate, since acks follow a page-cache write and fsync leaves the hot path (surviving a process crash, not power loss). The absolute floor catches an fsync creeping into the Relaxed path only on hosts where an fsync costs milliseconds; with sub-millisecond fsync or a tmpfs log directory it detects only a catastrophic slowdown. The metric is named by the tier that actually ran, from the same match that selects it (unit-tested in the example, which also refuses an unknown DURABILITY with exit 2); this command runs and gates only the relaxed tier. | `DURABILITY=relaxed BENCH_N=20000 cargo run --quiet --release --locked -p astream-broker --example broker_durability_bench` |
 | `broker.replicated-tier` | A leader opened with Broker::open_replicated writes to the page cache (no fsync) and ships every committed record, commit records and annotations included, to follower brokers over TCP at its exact offset; a follower refuses a gap or conflicting record, so its log is an identical prefix. An ack is given only once a quorum of followers holds the record in memory, so it survives loss of the leader node but not full-cluster power loss; only a Will registration is acked on local commit. Tested: acks follow the follower's head advancing; after leader shutdown the follower serves every acked record with dedup; an unresponsive or dropped follower turns acks into errors until it is re-dialed and caught up; an unreachable quorum is refused at open; a follower that lost its log is rebuilt, a diverged one fenced, and one missing records below the leader's retention base is left behind rather than rebuilt. One static leader with static followers; no election or failover. | `cargo test --locked -p astream-broker --test replicated --test broker_core_regressions && cargo test --locked -p astream-broker --features retention --test replicated_retained_open` |
@@ -225,7 +228,7 @@ Every claim below is backed by a command anyone can re-run. Project: `astream`.
 ## What is not built
 
 Open work — seeds and designs with no manifest row yet — is listed in
-[`docs/ROADMAP.md`](docs/ROADMAP.md). The largest items: identity bound to an
+the development roadmap. The largest items: identity bound to an
 external authority (SSH agent, OIDC) with key distribution and rotation; capability
 revocation beyond expiry; leader election and follower catch-up for the Replicated
 tier; the Kafka Produce/Fetch data path; and an in-tree end-to-end claim for aterm

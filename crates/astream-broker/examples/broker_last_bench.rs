@@ -13,11 +13,16 @@
 //!   rate of a `PAGE`-row query on the SAME index. A range scan pays for the page it
 //!   returns, so a 64-row page is ~64x cheaper than a 4096-row one; a query that
 //!   walked the whole history (or the whole index) instead would cost the same at
-//!   either size and drive this toward 1. `MIN_PAGE_RATIO` bounds it.
+//!   either size and drive this toward 1. Gated at 8 by the claim
+//!   `broker.bench.last-page-cost-ratio`.
 //! * `broker_last_ingest_ratio` — durable publishes/s while the query loop hammers
 //!   the broker, over publishes/s for the SAME work with the query loop idle. It
 //!   fails if a query holds the writer's log lock for its whole duration instead of
-//!   for the page clone. `MIN_INGEST_RATIO` bounds it.
+//!   for the page clone. Gated at 0.25 by the claim `broker.bench.last-ingest-ratio`.
+//!
+//!   Both ratios are gated by manifest claims and not by an exit here: each is a TIMING
+//!   measurement, and the evidence runner re-measures a bench that misses its bound (best of
+//!   `BENCH_ATTEMPTS`), which a hard `exit` inside the bench would bypass.
 //!
 //!   SUBJECTS=10000 HISTORY=200000 cargo run --release -p astream-broker --example broker_last_bench
 
@@ -25,21 +30,6 @@
 use astream_broker::{Broker, Client};
 #[cfg(unix)]
 use std::time::Instant;
-
-/// Ingest under a concurrent query loop must keep at least this share of its own
-/// un-queried rate in the SAME run. Set far below the observed ratio (which is close
-/// to 1: a query holds the log lock only long enough to clone a page of `Arc`s), so
-/// it gates the structural regression — a query that parks the writer — and not
-/// scheduling noise.
-#[cfg(unix)]
-const MIN_INGEST_RATIO: f64 = 0.25;
-
-/// A small page must be at least this many times cheaper than a full one. The ideal
-/// is `PAGE / SMALL_PAGE` (64); a per-query walk of the history or of the whole
-/// subject index would flatten it to ~1. Set far below observed, so it gates that
-/// structural regression and not the fixed per-request cost.
-#[cfg(unix)]
-const MIN_PAGE_RATIO: f64 = 8.0;
 
 #[cfg(unix)]
 fn env(k: &str, d: u64) -> u64 {
@@ -254,20 +244,10 @@ fn main() {
     );
     let _ = std::fs::remove_file(&log);
 
-    if page_ratio < MIN_PAGE_RATIO {
-        eprintln!(
-            "FAIL: small-page/full-page rate ratio {page_ratio:.2} < {MIN_PAGE_RATIO} — a Last \
-             query is scanning more than the page it returns"
-        );
-        drop(tmp);
-        std::process::exit(2);
-    }
-    if ratio < MIN_INGEST_RATIO {
-        eprintln!(
-            "FAIL: concurrent-query ingest ratio {ratio:.3} < {MIN_INGEST_RATIO} — a Last \
-             query is holding the writer's log lock beyond its page"
-        );
-        drop(tmp);
-        std::process::exit(2);
-    }
+    // Both ratios are gated by manifest claims (see the module docs), not here. The ideal page
+    // ratio is `PAGE / SMALL_PAGE` (64); a per-query walk of the history or of the whole subject
+    // index would flatten it to ~1, so 8 gates that structural regression and not the fixed
+    // per-request cost. The ingest ratio is close to 1 (a query holds the log lock only long
+    // enough to clone a page of `Arc`s); 0.25 gates a query that parks the writer, not noise.
+    drop(tmp);
 }

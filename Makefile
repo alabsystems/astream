@@ -37,7 +37,7 @@ doc:
 	RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps
 	RUSTDOCFLAGS="-D warnings" cargo doc --locked --workspace --no-deps --all-features
 
-# The full merge gate. The hosted workflow (.github/workflows/ci.yml) runs exactly
+# The full merge gate. The hosted workflow (.github/workflows/ci.yml, development tree only) runs exactly
 # this target on Linux; run it locally before pushing. fmt, clippy (every feature)
 # and rustdoc run with warnings denied, so a formatting, lint, or doc regression —
 # including one in the feature-gated cap/aead security code — fails the gate.

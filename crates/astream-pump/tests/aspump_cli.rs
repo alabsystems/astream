@@ -615,7 +615,7 @@ fn aspump_rejects_contradictory_and_unsupported_fabric_flags() {
 fn aspump_never_echoes_a_key_given_as_flag_equals_value() {
     // `--key=HEX` is the same key-on-argv mistake as `--key HEX`; the refusal
     // must not copy the key into stderr (and whatever log collects it).
-    let key = "0123456789abcdef".repeat(4);
+    let key: String = std::iter::repeat_n("0123456789abcdef", 4).collect();
     for arg in [format!("--key={key}"), format!("--psk={key}")] {
         let output = spawn(&["/nonexistent/aspump.sock", "sid", &arg])
             .wait_with_output()

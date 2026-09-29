@@ -1,4 +1,4 @@
-//! The merge gate must reject each kafka2 failure mode, pass clean code, and
+//! The merge gate must reject each failure mode of the predecessor, pass clean code, and
 //! — the ultimate proof — pass astream's own tree.
 
 use astream_evidence::gate::{check_root, run_gate, Violation};
@@ -284,7 +284,7 @@ fn skips_named_tool_state_dirs_but_scans_every_other_dot_directory() {
     // planted there must not be reported. Every OTHER dot-directory is source:
     // `helper = { path = "../.vendor/helper" }` is a dependency cargo compiles,
     // so a cfg typo in it dead-codes a module that really ships — the exact
-    // kafka2 class. Pruning it by name shape would hide that from every lint.
+    // predecessor class. Pruning it by name shape would hide that from every lint.
     let base = std::env::temp_dir().join(format!("astream-gate-hidden-{}", std::process::id()));
     let _tmp = Cleanup(base.clone());
     let git_dep = "[package]\nname = \"x\"\n[dependencies]\nfoo = { git = \"https://example.invalid/foo\" }\n";

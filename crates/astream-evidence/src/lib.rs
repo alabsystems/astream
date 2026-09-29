@@ -1,7 +1,7 @@
 #![forbid(unsafe_code)]
 //! # astream-evidence
 //!
-//! The honesty harness that makes kafka2's failure modes structurally
+//! The honesty harness that makes the predecessor's failure modes structurally
 //! impossible in astream:
 //!
 //! * [`manifest`] — the evidence manifest: the single source of truth for

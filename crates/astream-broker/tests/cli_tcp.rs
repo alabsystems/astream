@@ -220,7 +220,10 @@ fn asb_sealed_tcp_roundtrip_with_key_from_env_and_file() {
     let _dir = Cleanup::new(&[&dir]);
     std::fs::create_dir_all(&dir).unwrap();
     let keyfile = dir.join("psk");
-    let key_hex = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    // 00112233…eeff twice: byte i is (i % 16) * 0x11.
+    let key_hex: String = (0..32u8)
+        .map(|i| format!("{:02x}", (i % 16) * 0x11))
+        .collect();
     std::fs::write(&keyfile, format!("{key_hex}\n")).unwrap(); // trailing newline is fine
                                                                // 0600: `asb serve` refuses a key file anyone but its owner can read.
     std::fs::set_permissions(

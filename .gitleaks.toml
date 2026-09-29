@@ -1,0 +1,5 @@
+# Public-export secret scanning keeps every built-in detector enabled.
+# The central publication engine rejects repo-local allowlists and bypasses,
+# scans Git history, and scans the immutable final export again before staging.
+[extend]
+useDefault = true

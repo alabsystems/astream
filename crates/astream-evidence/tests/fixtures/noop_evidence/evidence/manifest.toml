@@ -1,5 +1,5 @@
 # Fixture: a confident claim backed by a no-op command. The manifest-integrity
-# lint must reject this (the kafka2 "decorative proof" failure class). Intentional
+# lint must reject this (the predecessor's "decorative proof" failure class). Intentional
 # violation — lives under tests/fixtures/, which the gate never scans recursively.
 
 [meta]

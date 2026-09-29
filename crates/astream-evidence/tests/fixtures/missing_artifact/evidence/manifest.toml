@@ -1,5 +1,5 @@
 # Fixture: a claim whose command cites a script that does not exist. The
-# manifest-integrity lint must reject this (the kafka2 "cited evidence file that
+# manifest-integrity lint must reject this (the predecessor's "cited evidence file that
 # did not exist" class) at gate time. Intentional violation.
 
 [meta]
