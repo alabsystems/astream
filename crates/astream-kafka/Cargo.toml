@@ -1,0 +1,11 @@
+[package]
+name = "astream-kafka"
+description = "astream Kafka wire-protocol codec (codec only, not yet wired): a std-only encoder/decoder for the Kafka request/response framing, ApiVersions and Metadata (v0), proven at the byte level. Nothing listens for Kafka clients yet -- the broker accept path speaks astream Frames, not Kafka framing; wiring, and the Produce/Fetch data path (record-batch v2), are the next increments. Zero third-party deps, forbid(unsafe)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# Zero third-party deps — std-only codec. (No Kafka client lib; this IS the wire.)
+[dependencies]

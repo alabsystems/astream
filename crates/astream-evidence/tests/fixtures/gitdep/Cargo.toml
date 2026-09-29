@@ -1,0 +1,9 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# A git dependency — the kafka2 404-revision class that broke the public build.
+[package]
+name = "fx-gitdep"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+sketchy = { git = "https://example.invalid/sketchy", rev = "deadbeef" }

@@ -1,0 +1,15 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only): a lockfile
+# whose resolved graph contains a git source.
+version = 4
+
+[[package]]
+name = "fx-gitdep-lock"
+version = "0.0.0"
+dependencies = [
+ "sketchy",
+]
+
+[[package]]
+name = "sketchy"
+version = "0.1.0"
+source = "git+https://example.invalid/sketchy?rev=deadbeef#deadbeef"

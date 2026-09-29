@@ -1,0 +1,7 @@
+/target
+# Agent-harness state (worktrees it creates while working on this repo). The gate
+# skips it as tool state; git should not offer to commit it either.
+.claude/
+**/*.rs.bk
+.DS_Store
+# Cargo.lock is COMMITTED on purpose — reproducible builds are the thesis.

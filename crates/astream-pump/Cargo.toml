@@ -1,0 +1,25 @@
+[package]
+name = "astream-pump"
+description = "astream-pump -- the drive-pipe PUMP: hold a broker SUBSCRIBE on a target terminal session's /out subtree, feed each delivered Out record to astream-term's streaming semantic-event classifier, and surface the wake boundaries (prompt-ready, command-start, command-end+exit, quiescence) a turn-based driving agent acts on. astream stops at a socket that blocks until an event; the pump turns those events into an agent's wake -- the missing bridge from a block-forever bus to a turn-based agent. See docs/DESIGN-drive-pipe.md."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# Off by default: `aspump --key-file` over the XChaCha20-Poly1305-sealed TCP
+# transport. It only turns on the broker's own `aead` feature — no NEW
+# third-party dependency, and the default pump stays zero-third-party.
+[features]
+aead = ["astream-broker/aead"]
+
+# The pump wires the transport (astream-broker) to perception (astream-term).
+# forbid(unsafe); its dependencies are only in-repo substrate crates.
+[dependencies]
+astream-broker = { path = "../astream-broker" }
+astream-term = { path = "../astream-term" }
+
+# `aspump` — the shell face: tail a session's /out and print semantic wake lines.
+[[bin]]
+name = "aspump"
+path = "src/bin/aspump.rs"

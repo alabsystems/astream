@@ -1,0 +1,14 @@
+[package]
+name = "astream-effects"
+description = "astream Effects rung, cooperative form: a program written against EffectSeam records its real clock/rng/file reads to a typed EffectsLog and replays them byte-identically with no OS call."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Zero third-party normal dependencies. The Effects seam is pure `std`
+# (SystemTime / fs / RandomState) plus an inlined fold; effects recording never
+# needs the wire frame or any `unsafe`.
+[dependencies]

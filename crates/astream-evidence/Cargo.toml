@@ -1,0 +1,21 @@
+[package]
+name = "astream-evidence"
+description = "The astream honesty harness: evidence manifest runner, doc generator, and the merge-gate lints."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[lib]
+name = "astream_evidence"
+path = "src/lib.rs"
+
+[[bin]]
+name = "astream-evidence"
+path = "src/main.rs"
+
+[dependencies]
+serde.workspace = true
+toml.workspace = true
+sha2.workspace = true

@@ -1,0 +1,6 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# The verification crate referenced by ../Cargo.toml as a path dependency.
+[package]
+name = "verify-harness"
+version = "0.0.0"
+edition = "2021"

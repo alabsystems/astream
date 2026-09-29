@@ -1,0 +1,17 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# `plain` and `unixonly` are optional dependencies, so each implicitly declares a
+# like-named feature. `hidden` is named with `dep:` in [features], which
+# suppresses its implicit feature: `cfg(feature = "hidden")` can never be on.
+[package]
+name = "optdeps"
+version = "0.0.0"
+
+[dependencies]
+hidden = { version = "1", optional = true }
+plain = { version = "1", optional = true }
+
+[target.'cfg(unix)'.dependencies]
+unixonly = { version = "1", optional = true }
+
+[features]
+wrap = ["dep:hidden"]

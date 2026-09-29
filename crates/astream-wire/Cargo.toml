@@ -1,0 +1,16 @@
+[package]
+name = "astream-wire"
+description = "astream pure vocabulary: frame codec, Subject/Filter, partitioning, offsets. Zero I/O, zero deps."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# astream-wire has NO normal dependencies, on purpose. It is the one crate
+# everything else builds on, so it must be trivially auditable and panic-free.
+[dependencies]
+
+[dev-dependencies]
+proptest.workspace = true

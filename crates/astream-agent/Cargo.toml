@@ -1,0 +1,17 @@
+[package]
+name = "astream-agent"
+description = "astream Cognition rung: an agent turn recorded as a COG_VERSION-framed cognition log, replayed hermetically by a planner-driven loop, counterfactually forkable, and unified with the In/Out/Effects streams on one offset axis."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Zero third-party normal dependencies — only the in-repo substrate. The cognition
+# log reuses the CRC `astream-wire` frame; the agent's screen reuses the
+# `astream-term` fold.
+[dependencies]
+astream-wire = { path = "../astream-wire" }
+astream-term = { path = "../astream-term" }
+astream-effects = { path = "../astream-effects" }

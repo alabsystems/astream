@@ -1,0 +1,25 @@
+[package]
+name = "astream-host"
+description = "astream live PTY host: spawns a real pseudo-terminal running a child process, drains the PTY master into Record::Out on the engine Log through the effect seam, reaps the child into Record::Exit, and proves the recorded session replays byte-identically from stored bytes. The only crate in the workspace that contains unsafe, confined to two cordoned cfg-gated modules: sys (unix, the PTY syscalls) and foreign (linux, the ptrace tracer)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-engine = { path = "../astream-engine" }
+astream-term = { path = "../astream-term" }
+# Reused by the cfg(linux) foreign-process Effects tracer for its tape type
+# (EffectRecord / EffectsLog) — a workspace path dep, zero third-party.
+astream-effects = { path = "../astream-effects" }
+
+# The one platform dependency, behind the workspace's only `unsafe` (the sys and
+# foreign cordon modules). libc is already a normal dependency in the locked
+# graph (via sha2 -> cpufeatures), so this adds zero new crates to the
+# reproducible build. cfg(unix)-gated so other targets never see it.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[dev-dependencies]
+proptest.workspace = true

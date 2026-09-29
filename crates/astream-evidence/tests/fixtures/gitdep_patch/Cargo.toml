@@ -1,0 +1,14 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# A git dependency introduced through `[patch.crates-io]` — the canonical way
+# to redirect a registry crate to a git checkout. The dependency tables are
+# clean; only the patch table carries the git source.
+[package]
+name = "fx-gitdep-patch"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+sha2 = "0.10"
+
+[patch.crates-io]
+sha2 = { git = "https://example.invalid/sha2", rev = "deadbeef" }

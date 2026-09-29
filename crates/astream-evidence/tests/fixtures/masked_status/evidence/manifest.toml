@@ -1,0 +1,59 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# Each `masked.*` command can discard a failing exit status, so a broken build or
+# a failing test would still read as a pass. The `*.fine` commands cannot.
+[meta]
+project = "fixture-masked-status"
+
+[[claim]]
+id = "masked.or"
+kind = "test"
+text = "The suite passes."
+command = "cargo test --locked || true"
+
+[[claim]]
+id = "masked.semicolon"
+kind = "build"
+text = "The workspace builds."
+command = "cargo build --locked; true"
+
+[[claim]]
+id = "masked.pipe"
+kind = "test"
+text = "The suite passes."
+command = "cargo test --locked | tee out.log"
+
+[[claim]]
+id = "masked.background"
+kind = "build"
+text = "The workspace builds."
+command = "cargo build --locked & wait"
+
+[[claim]]
+id = "masked.newline"
+kind = "build"
+text = "The workspace builds."
+command = "cargo build --locked\ntrue"
+
+[[claim]]
+id = "masked.negated"
+kind = "test"
+text = "The suite passes."
+command = "! cargo test --locked"
+
+[[claim]]
+id = "chained.fine"
+kind = "test"
+text = "Both suites pass."
+command = "cargo test --locked -p a && cargo test --locked -p b"
+
+[[claim]]
+id = "quoted.fine"
+kind = "test"
+text = "The suite passes."
+command = "cargo test --locked -- --skip 'a|b;c' --skip \"d||e\""
+
+[[claim]]
+id = "redirect.fine"
+kind = "test"
+text = "The suite passes."
+command = "cargo test --locked 2>&1"

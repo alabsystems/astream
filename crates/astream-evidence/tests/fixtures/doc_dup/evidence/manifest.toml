@@ -1,0 +1,9 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+[meta]
+project = "fx-doc-dup"
+
+[[claim]]
+id = "only.claim"
+kind = "test"
+text = "a single real claim"
+command = "true"

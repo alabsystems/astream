@@ -1,0 +1,10 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# A git dependency with odd whitespace around `=` — the old substring scan,
+# which matched only `git = "` / `git="`, never saw this.
+[package]
+name = "fx-gitdep-spaced"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+sketchy = { git  =  "https://example.invalid/x", rev = "deadbeef" }

@@ -1,0 +1,13 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# A denylisted no-op program behind leading VAR=value assignments is still the
+# no-op program: `sh -c` runs `echo` here, whatever the environment says.
+[meta]
+project = "fixture-noop-env"
+
+[[claim]]
+id = "noop.behind.env"
+kind = "bench"
+text = "Publish throughput holds its floor."
+command = "BENCH_N=5 echo METRIC ops 100"
+metric = "ops"
+min_value = 1.0

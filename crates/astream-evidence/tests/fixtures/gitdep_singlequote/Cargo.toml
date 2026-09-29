@@ -1,0 +1,9 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# A SINGLE-QUOTED git dependency — valid TOML the old substring scan missed.
+[package]
+name = "fx-gitdep-sq"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+sketchy = { git = 'https://example.invalid/x', rev = 'deadbeef' }

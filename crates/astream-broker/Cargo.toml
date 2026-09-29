@@ -1,0 +1,71 @@
+[package]
+name = "astream-broker"
+description = "astream servable broker: durable exactly-once pub/sub, Filter-routed subscribe, resume-from-offset (replay-subscription), durable consumer groups and atomic read-process-write, served over a Unix-domain socket, plaintext TCP, or (feature `aead`) an XChaCha20-Poly1305-sealed TCP transport; capability enforcement on attach behind feature `cap`. std-only concurrency (threads + Mutex/Condvar), zero third-party deps by default, forbid(unsafe)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# Zero third-party dependencies — std only (threads, sync, UnixListener) plus the
+# in-tree wire vocabulary. The broker is a substrate crate, so forbid(unsafe).
+[features]
+# Off by default: enforce capabilities on the accept path. Pulls astream-cap
+# (and its vetted sha2), so the default broker stays zero-third-party.
+cap = ["dep:astream-cap"]
+# Off by default: an XChaCha20-Poly1305-sealed TCP transport (serve_tcp_sealed /
+# Client::connect_tcp_sealed). Pulls astream-aead (and its vetted cipher), so the
+# default broker stays zero-third-party.
+aead = ["dep:astream-aead"]
+# Off by default: the Rung-7 forward-secret handshake (serve_tcp_handshake /
+# Client::connect_tcp_handshake) — ephemeral X25519 authenticated by the PSK.
+# Implies aead and enables astream-aead's handshake (pulls the vetted curve).
+handshake = ["aead", "astream-aead/handshake"]
+# Off by default: Rung-8 static public-key identity (serve_tcp_identity /
+# Client::connect_tcp_identity) — mutual signed-DH (SIGMA/Ed25519), no shared
+# secret. Implies handshake and enables astream-aead's identity (pulls Ed25519).
+identity = ["handshake", "astream-aead/identity"]
+# Off by default: encrypt-at-rest for the durable log (Broker::open_encrypted /
+# BrokerLog::open_encrypted). Seals each record's payload on disk with the AEAD
+# (reuses astream-aead via `aead`); the default broker writes plaintext frames.
+at-rest = ["aead"]
+# Off by default: anti-rollback for the encrypted log (Broker::open_encrypted_verified).
+# Maintains an authenticated monotonic head watermark (a `<log>.hw` sidecar) so a
+# write-capable attacker cannot silently truncate/roll back the log. Implies at-rest.
+anti-rollback = ["at-rest"]
+# Off by default: retention (Broker::retain_before / BrokerLog::retain_before) —
+# compact the log by dropping records below a floor offset, keeping surviving
+# offsets absolute. std-only; works on plaintext and encrypted logs.
+retention = []
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-cap = { path = "../astream-cap", version = "0.1.0", optional = true }
+astream-aead = { path = "../astream-aead", version = "0.1.0", optional = true }
+
+# Dev-only, and IN-TREE (not third-party): the cognition-routing test publishes a
+# REAL astream-agent CogRecord through the bus. astream-agent's own lib graph is
+# zero-third-party, so `cargo test` still pulls no crates.io dependency.
+[dev-dependencies]
+astream-agent = { path = "../astream-agent" }
+# For the at-rest test only: Offset + Frame, to read/tamper raw log bytes.
+astream-wire = { workspace = true }
+# For the cap-enforcement test only (mints capabilities); the LIB graph stays
+# zero-third-party (astream-cap is an OPTIONAL runtime dep behind the `cap` feature).
+astream-cap = { path = "../astream-cap" }
+
+# The durability bench carries the unit tests that pin its tier→label mapping (the
+# gated bench command runs only the relaxed tier), so it is built as a test target.
+[[example]]
+name = "broker_durability_bench"
+path = "examples/broker_durability_bench.rs"
+test = true
+
+# `asb` — the thin CLI over the library (serve / pub / sub / last / fetch / drain / ack /
+# commit / mint / repair) so a shell or bridge can move bytes on the bus, read retained
+# state and drain an inbox. std-only; no new dependency. `mint` and `--cap-file` need the
+# `cap` feature (they compute the same vetted MAC the broker verifies with).
+[[bin]]
+name = "asb"
+path = "src/bin/asb.rs"

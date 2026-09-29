@@ -1,0 +1,35 @@
+[package]
+name = "astream-aead"
+description = "astream AEAD wire: XChaCha20-Poly1305 seal/open over a pre-shared key, and a transparent ordered-record SealedStream (a per-connection hello handshake; every record's AAD binds both hellos, the direction, and the sequence) so the broker's Frame protocol runs confidential + authenticated over TCP. Wraps the vetted RustCrypto chacha20poly1305 (an IETF-standard AEAD) -- never a hand-rolled cipher/MAC -- the AEAD half of 'SSH' the capability mint (astream-cap) does not cover. This is the ONE crate that pulls a cipher dependency; the substrate stays zero-third-party."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# The vetted, IETF-standard AEAD (RustCrypto). This crate is the deliberate,
+# isolated crypto-dependency boundary -- exactly as astream-cap isolates sha2.
+# forbid(unsafe) applies to THIS crate's own code (the dep may use SIMD unsafe).
+[dependencies]
+chacha20poly1305 = { version = "0.10", default-features = false }
+getrandom = "0.2"
+# Rung 7 handshake, behind the `handshake` feature (off by default). We OWN the
+# protocol, the transcript binding, and HMAC/HKDF-SHA256 (composed here over the
+# workspace sha2, like astream-cap owns its HMAC). The ONE thing we delegate is
+# the raw X25519 scalar multiplication -- hand-rolling constant-time curve25519
+# field arithmetic is where DIY crypto breaks -- to the vetted x25519-dalek. Its
+# ephemeral secret is seeded from the getrandom we already depend on (no rand_core),
+# and zeroized on drop.
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"], optional = true }
+sha2 = { workspace = true, optional = true }
+# Rung 8 identity: the vetted Ed25519 signature primitive. We own the SIGMA
+# signed-DH protocol; only the raw sign/verify is delegated.
+ed25519-dalek = { version = "2", default-features = false, features = ["std", "zeroize"], optional = true }
+
+[features]
+handshake = ["dep:x25519-dalek", "dep:sha2"]
+# Static public-key identity (Rung 8): mutual signed-DH (SIGMA/Ed25519). Reuses
+# the handshake's ephemeral X25519 + HKDF for the session key; adds Ed25519
+# identity signatures. Off by default, so the base crate stays signature-free.
+identity = ["handshake", "dep:ed25519-dalek"]

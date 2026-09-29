@@ -1,0 +1,12 @@
+# FIXTURE (scanned by the gate test only). A leading VAR=value assignment whose
+# value is a path is environment for the program, not a path the claim cites.
+[meta]
+project = "fixture-env-path"
+
+[[claim]]
+id = "env.path.fine"
+kind = "bench"
+text = "Throughput holds its floor."
+command = "OUT_DIR=target/bench-out cargo bench --locked"
+metric = "ops"
+min_value = 1.0

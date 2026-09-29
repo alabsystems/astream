@@ -1,0 +1,15 @@
+[package]
+name = "astream-engine"
+description = "astream-engine rung 1: a single-partition deterministic single-writer Log over an effect seam, storing astream-term records as versioned tag+seq+ts envelopes inside astream-wire frames. Record-and-replay is byte-identical and the /out fold reconstructs the live screen from stored bytes."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-term = { path = "../astream-term" }
+
+[dev-dependencies]
+proptest.workspace = true

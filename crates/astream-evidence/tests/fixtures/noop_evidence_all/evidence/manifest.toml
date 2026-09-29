@@ -1,0 +1,53 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# One confident claim per denylisted no-op program. Every one must be rejected
+# by the manifest-integrity lint as decorative evidence.
+[meta]
+project = "fixture-noop-all"
+
+[[claim]]
+id = "noop.true"
+kind = "test"
+text = "Durability survives kill -9."
+command = "true"
+
+[[claim]]
+id = "noop.colon"
+kind = "test"
+text = "Durability survives kill -9."
+command = ":"
+
+[[claim]]
+id = "noop.echo"
+kind = "test"
+text = "Durability survives kill -9."
+command = "echo verified"
+
+[[claim]]
+id = "noop.printf"
+kind = "test"
+text = "Durability survives kill -9."
+command = "printf verified"
+
+[[claim]]
+id = "noop.cat"
+kind = "test"
+text = "Durability survives kill -9."
+command = "cat golden.txt"
+
+[[claim]]
+id = "noop.head"
+kind = "test"
+text = "Durability survives kill -9."
+command = "head golden.txt"
+
+[[claim]]
+id = "noop.tail"
+kind = "test"
+text = "Durability survives kill -9."
+command = "tail golden.txt"
+
+[[claim]]
+id = "noop.absolute"
+kind = "test"
+text = "Durability survives kill -9."
+command = "/usr/bin/true"

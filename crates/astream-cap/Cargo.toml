@@ -1,0 +1,17 @@
+[package]
+name = "astream-cap"
+description = "astream capability mint: an unforgeable, HMAC-SHA256-signed capability over the astream_wire Filter grammar. A capability IS a signed Filter (a subject subtree the bearer may attach/observe/drive); the broker mints and verifies it. Uses the workspace-vetted sha2 (RFC-2104 HMAC over SHA-256) — a standard construction over a vetted primitive, never a hand-rolled cipher/MAC. The other half of 'SSH' (an AEAD wire) is a separate, deliberate crypto-dependency decision."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# sha2 is the ONE crypto-grade primitive — already a vetted workspace dependency
+# (astream-evidence hashes with it). HMAC is built on it per RFC 2104; no primitive
+# is hand-rolled. astream-wire provides the Filter/Subject grammar the capability
+# authorizes over. forbid(unsafe).
+[dependencies]
+astream-wire = { workspace = true }
+sha2 = { workspace = true }

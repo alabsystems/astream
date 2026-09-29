@@ -1,0 +1,3 @@
+INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+FIXME(#notanum) crash in the reaper path
+[WIP] partition rebalance not finished

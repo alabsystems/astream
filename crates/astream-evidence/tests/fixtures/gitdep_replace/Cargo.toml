@@ -1,0 +1,12 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# A git dependency introduced through the deprecated `[replace]` table.
+[package]
+name = "fx-gitdep-replace"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+toml = "0.8"
+
+[replace]
+"toml:0.8.0" = { git = "https://example.invalid/toml", rev = "deadbeef" }

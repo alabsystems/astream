@@ -1,0 +1,12 @@
+# Fixture: a confident claim backed by a no-op command. The manifest-integrity
+# lint must reject this (the kafka2 "decorative proof" failure class). Intentional
+# violation — lives under tests/fixtures/, which the gate never scans recursively.
+
+[meta]
+project = "fixture-noop"
+
+[[claim]]
+id = "decorative.proof"
+kind = "test"
+text = "Strict durability fsyncs every append and survives kill -9 with zero data loss, verified by fault injection."
+command = "true"

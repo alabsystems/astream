@@ -1,0 +1,10 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# The same verify* path edge as `verify_pathdep`, in a target-specific table:
+# cargo compiles it on that target just the same.
+[package]
+name = "fx-substrate-target"
+version = "0.0.0"
+edition = "2021"
+
+[target.'cfg(unix)'.dependencies]
+verify-harness = { path = "verify-harness" }

@@ -1,0 +1,9 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# The manifest is clean; the committed lockfile (what cargo actually fetches)
+# resolves a package to a git source.
+[package]
+name = "fx-gitdep-lock"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]

@@ -1,0 +1,12 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# `platform` is not a `std::env::consts::OS` value: it would match no host and
+# the claim would be skipped everywhere, forever, with a green gate.
+[meta]
+project = "fixture-bad-platform"
+
+[[claim]]
+id = "never.runs"
+kind = "test"
+text = "The ptrace effects suite passes."
+command = "cargo test --locked -p fx --test effects"
+platform = "Linux"

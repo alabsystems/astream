@@ -1,0 +1,24 @@
+[package]
+name = "astream-live"
+description = "astream live-capture bridge: parses a real Anthropic Messages response (hand-rolled JSON, zero deps) into a unified four-stream session that replays through astream-agent; the live model call itself shells out to curl or the claude CLI and is #[ignore]-gated."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Zero third-party dependencies. A real JSON parser is hand-rolled (src/json.rs)
+# and the live API call shells out to `curl` (std::process), so the live-capture
+# bridge joins the workspace without pulling an HTTP/TLS or serde tree into
+# astream's reproducible-build graph. Only the in-repo substrate is depended on.
+[dependencies]
+astream-agent = { path = "../astream-agent" }
+astream-effects = { path = "../astream-effects" }
+
+# The hand-rolled JSON parser is the highest-risk attacker-facing surface (it
+# parses untrusted API-response bytes), so it carries a property test asserting
+# it never panics and round-trips on arbitrary input. proptest is dev-only —
+# the reproducible-build graph of the crate proper stays zero-third-party.
+[dev-dependencies]
+proptest.workspace = true

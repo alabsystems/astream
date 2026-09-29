@@ -1,0 +1,11 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# `kind` is misspelled: a claim outside the closed kind set would escape the
+# checks its real kind carries (here: the zero-tests check for `test`).
+[meta]
+project = "fixture-bad-kind"
+
+[[claim]]
+id = "relabelled.test"
+kind = "tests"
+text = "The reaper suite passes."
+command = "cargo test --locked -p fx --lib zzz_no_such_test"
