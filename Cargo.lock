@@ -10,21 +10,21 @@ checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
 name = "astream-abrew-bottle"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-abrew-pkg"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-aead"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "ed25519-dalek",
@@ -36,7 +36,7 @@ dependencies = [
 
 [[package]]
 name = "astream-agent"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-effects",
  "astream-term",
@@ -45,35 +45,35 @@ dependencies = [
 
 [[package]]
 name = "astream-agy-quota"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-atpkg-toolchain"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-audit-seal"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-autopilot-ctl"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-broker"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-aead",
  "astream-agent",
@@ -85,7 +85,7 @@ dependencies = [
 
 [[package]]
 name = "astream-cap"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-sys",
@@ -94,7 +94,7 @@ dependencies = [
 
 [[package]]
 name = "astream-cap-ext"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-aead",
  "astream-cap",
@@ -104,7 +104,7 @@ dependencies = [
 
 [[package]]
 name = "astream-cert-auth"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-cap",
  "astream-digest",
@@ -113,7 +113,7 @@ dependencies = [
 
 [[package]]
 name = "astream-coalesce-1"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-wire",
@@ -121,69 +121,69 @@ dependencies = [
 
 [[package]]
 name = "astream-coalesce-2"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-coalesce-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-coalesce-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-coalesce-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-coalesce-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cognition-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cognition-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cognition-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cognition-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cognition-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cognition-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-cross-cells"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-digest"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-effects"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-engine"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-term",
@@ -193,11 +193,11 @@ dependencies = [
 
 [[package]]
 name = "astream-env-scrub"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-evidence"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "syn",
@@ -206,14 +206,14 @@ dependencies = [
 
 [[package]]
 name = "astream-ext-authority"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-fabric"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-broker",
  "astream-sys",
@@ -222,14 +222,14 @@ dependencies = [
 
 [[package]]
 name = "astream-fabric-mail"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-fabric-ops"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-wire",
@@ -237,80 +237,80 @@ dependencies = [
 
 [[package]]
 name = "astream-failover-ops"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-flow-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-flow-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-flow-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-flow-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-flow-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-flow-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-git-align"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-grapheme-layout"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-guards-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-guards-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-guards-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-guards-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-guards-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-guards-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-held-compactor"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-host"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-effects",
  "astream-engine",
@@ -321,31 +321,31 @@ dependencies = [
 
 [[package]]
 name = "astream-integrity-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-integrity-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-integrity-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-integrity-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-integrity-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-integrity-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-kafka"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-aead",
  "astream-broker",
@@ -355,49 +355,49 @@ dependencies = [
 
 [[package]]
 name = "astream-keybind-chord"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-lease-failover"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-leases-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-leases-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-leases-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-leases-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-leases-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-leases-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-link-cut"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-live"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-agent",
  "astream-effects",
@@ -406,14 +406,14 @@ dependencies = [
 
 [[package]]
 name = "astream-macos-tcc"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-mcp-bridge"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-wire",
@@ -421,32 +421,32 @@ dependencies = [
 
 [[package]]
 name = "astream-mesh-discovery"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-metal-damage"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-ordered-barrier"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-osc-protocol"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-presence-ext"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-wire",
@@ -454,48 +454,48 @@ dependencies = [
 
 [[package]]
 name = "astream-protocol-1"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-protocol-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-protocol-3"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-cap",
 ]
 
 [[package]]
 name = "astream-protocol-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-protocol-5"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-term",
 ]
 
 [[package]]
 name = "astream-protocol-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-pty-mux"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-pty-signal"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-pump"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-broker",
  "astream-engine",
@@ -507,14 +507,14 @@ dependencies = [
 
 [[package]]
 name = "astream-quota-sched"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-restore-ops"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-wire",
@@ -522,114 +522,114 @@ dependencies = [
 
 [[package]]
 name = "astream-resync-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-resync-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-resync-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-resync-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-resync-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-resync-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-retire-history"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-routing-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-routing-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-routing-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-routing-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-routing-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-routing-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-scrollback-tier"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-seccomp-replay"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-secret-vault"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-security-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-security-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-security-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-security-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-security-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-security-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-self-restart"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-session-ops"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
  "astream-effects",
@@ -638,117 +638,117 @@ dependencies = [
 
 [[package]]
 name = "astream-sim-fabric"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-smt-governor"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-speculative-echo"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-storage-1"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-storage-2"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-storage-3"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-storage-4"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-storage-5"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-storage-6"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-subagent-dag"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-subject-retire"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-sys"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-sys-telemetry"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-term"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "astream-transcript-idx"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-tunnel-relay"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-digest",
 ]
 
 [[package]]
 name = "astream-uds-owner"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "astream-vt-ext"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-term",
 ]
 
 [[package]]
 name = "astream-wan-delta"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-wire"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
 name = "astream-worktree-sync"
-version = "0.2.0"
+version = "0.2.1"
 
 [[package]]
 name = "autocfg"

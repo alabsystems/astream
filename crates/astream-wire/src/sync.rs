@@ -178,7 +178,27 @@ impl Fork {
 #[derive(Clone, Debug)]
 pub struct Index {
     records: BTreeMap<Digest, Header>,
+    /// Each retained actor's highest retained sequence, kept at insert ([`Index::frontier`]).
+    frontier: BTreeMap<Actor, u64>,
     capacity: usize,
+    /// Records a checkpoint stands for ([`Index::insert_floor`]), apart from `records`.
+    floor: BTreeMap<Digest, FloorRecord>,
+}
+
+/// A record at the boundary of a checkpoint's cut, admitted on the checkpoint's word rather than
+/// its own: its header and its causal past as a version vector (for each actor, the highest
+/// sequence in the record's past, its own included). The records below it are absent.
+///
+/// A floor record is never in [`Index::inventory`], never a fork witness and never ordered by a
+/// projection: the checkpoint's state already holds its effects. It is present for readiness (a
+/// record naming it as a parent or predecessor is ready without the floor record's own past) and
+/// as a discharged root, so a question about a record above it reads the given vector below it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FloorRecord {
+    /// The record's header.
+    pub header: Header,
+    /// For each actor, the highest sequence in the record's causal past, the record included.
+    pub past: BTreeMap<Actor, u64>,
 }
 
 /// Incremental admission against an immutable index and earlier accepted proposals.
@@ -290,6 +310,266 @@ pub struct Projection {
     pub quarantined: BTreeSet<Actor>,
     /// Records missing prerequisites, with impossible links, or depending on quarantine.
     pub pending: BTreeSet<Digest>,
+    /// The causal past of each record of `ordered`, as a version vector computed once in
+    /// causal order; [`Projection::observes`] reads it. A projection built elsewhere may
+    /// leave it empty, and then every question walks the index.
+    pub vectors: VersionVectors,
+}
+
+/// Entries a projection's version vectors may hold per retained record, [`MAX_PARENTS`]:
+/// as many as one header may name parents, so the vectors never outgrow what the
+/// headers themselves may hold, however many actors write.
+pub const VECTOR_ENTRIES_PER_RECORD: usize = MAX_PARENTS;
+
+/// Each discharged record's causal past as a version vector: for every actor in it, the
+/// highest sequence among the record and its ancestors.
+///
+/// A discharged record's ancestors are all discharged: each of its parents was, and
+/// each of its actor's records below it is retained in one dense previous-linked chain
+/// of an actor no fork quarantines. So one discharged record observes another exactly
+/// when the first's vector reaches the second's sequence at the second's actor: the
+/// ancestor that sets that entry reaches, down its own chain, the one retained record
+/// of that actor at that sequence, and a second record there would be a fork.
+///
+/// A row is sparse, one entry per actor in the record's past, and all rows together hold
+/// at most [`VECTOR_ENTRIES_PER_RECORD`] entries per retained record. A record whose row
+/// would pass that bound gets none, and nor does any record after it that names a
+/// record with none: questions about those walk, so the answer never changes, only its
+/// cost.
+#[derive(Clone, Default, PartialEq, Eq)]
+pub struct VersionVectors {
+    /// Actor ordinals: every actor the projected index retained, sorted.
+    actors: Vec<Actor>,
+    /// Each discharged record's row.
+    rows: BTreeMap<Digest, usize>,
+    /// Each row's own dot and where its entries sit.
+    dots: Vec<Dot>,
+    /// Every row's entries, each row's sorted by actor ordinal: the ordinal...
+    ordinals: Vec<u32>,
+    /// ... and the highest sequence of that actor in the row's past.
+    sequences: Vec<u64>,
+    /// Entries the rows may hold in all.
+    budget: usize,
+}
+
+/// A row's own actor ordinal and sequence, and the span of its entries.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct Dot {
+    actor: u32,
+    sequence: u64,
+    start: usize,
+    end: usize,
+}
+
+impl std::fmt::Debug for VersionVectors {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("VersionVectors")
+            .field("records", &self.dots.len())
+            .field("actors", &self.actors.len())
+            .field("entries", &self.ordinals.len())
+            .finish()
+    }
+}
+
+impl VersionVectors {
+    fn new(actors: Vec<Actor>, retained: usize) -> Self {
+        Self {
+            actors,
+            budget: retained.saturating_mul(VECTOR_ENTRIES_PER_RECORD),
+            ..Self::default()
+        }
+    }
+
+    /// Discharge `header` after each of its parents: its vector is their entrywise
+    /// maximum with its own sequence at its own actor. A header whose actor has no
+    /// ordinal, whose parent has no row, or whose row would pass the budget gets no row.
+    fn discharge(&mut self, header: &Header) {
+        let Some(own) = self
+            .actors
+            .binary_search(&header.actor)
+            .ok()
+            .and_then(|own| u32::try_from(own).ok())
+        else {
+            return;
+        };
+        let mut merged = vec![(own, header.sequence)];
+        for parent in &header.parents {
+            let Some(dot) = self.rows.get(parent).and_then(|row| self.dots.get(*row)) else {
+                return;
+            };
+            let (Some(ordinals), Some(sequences)) = (
+                self.ordinals.get(dot.start..dot.end),
+                self.sequences.get(dot.start..dot.end),
+            ) else {
+                return;
+            };
+            merged.extend(ordinals.iter().copied().zip(sequences.iter().copied()));
+        }
+        // Each actor's highest sequence first, then one entry per actor.
+        merged.sort_unstable_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+        merged.dedup_by_key(|entry| entry.0);
+        if merged.len() > self.budget.saturating_sub(self.ordinals.len()) {
+            return;
+        }
+        let start = self.ordinals.len();
+        for (ordinal, sequence) in merged {
+            self.ordinals.push(ordinal);
+            self.sequences.push(sequence);
+        }
+        self.rows.insert(header.id, self.dots.len());
+        self.dots.push(Dot {
+            actor: own,
+            sequence: header.sequence,
+            start,
+            end: self.ordinals.len(),
+        });
+    }
+
+    /// Give the floor record `header` the row `past`, with an allowance of its own beyond the
+    /// budget: a floor record has no retained past to walk instead.
+    fn seed(&mut self, header: &Header, past: &BTreeMap<Actor, u64>) {
+        let Some(own) = self
+            .actors
+            .binary_search(&header.actor)
+            .ok()
+            .and_then(|own| u32::try_from(own).ok())
+        else {
+            return;
+        };
+        let start = self.ordinals.len();
+        for (actor, sequence) in past {
+            let Some(ordinal) = self
+                .actors
+                .binary_search(actor)
+                .ok()
+                .and_then(|at| u32::try_from(at).ok())
+            else {
+                continue;
+            };
+            self.ordinals.push(ordinal);
+            self.sequences.push(*sequence);
+        }
+        self.budget = self.budget.saturating_add(self.ordinals.len() - start);
+        self.rows.insert(header.id, self.dots.len());
+        self.dots.push(Dot {
+            actor: own,
+            sequence: header.sequence,
+            start,
+            end: self.ordinals.len(),
+        });
+    }
+
+    /// Whether the row `row`'s past reaches `sequence` of `actor`.
+    fn reaches(&self, row: usize, actor: &Actor, sequence: u64) -> bool {
+        let (Some(dot), Ok(ordinal)) = (self.dots.get(row), self.actors.binary_search(actor))
+        else {
+            return false;
+        };
+        let (Some(ordinals), Some(sequences), Ok(ordinal)) = (
+            self.ordinals.get(dot.start..dot.end),
+            self.sequences.get(dot.start..dot.end),
+            u32::try_from(ordinal),
+        ) else {
+            return false;
+        };
+        ordinals
+            .binary_search(&ordinal)
+            .ok()
+            .and_then(|at| sequences.get(at))
+            .is_some_and(|seen| *seen >= sequence)
+    }
+
+    /// Whether the discharged record at `row` observes the discharged `earlier`.
+    fn covers(&self, row: usize, earlier: &Digest) -> bool {
+        let (Some(dot), Some(earlier)) = (
+            self.dots.get(row),
+            self.rows.get(earlier).and_then(|at| self.dots.get(*at)),
+        ) else {
+            return false;
+        };
+        let (Some(ordinals), Some(sequences)) = (
+            self.ordinals.get(dot.start..dot.end),
+            self.sequences.get(dot.start..dot.end),
+        ) else {
+            return false;
+        };
+        ordinals
+            .binary_search(&earlier.actor)
+            .ok()
+            .and_then(|at| sequences.get(at))
+            .is_some_and(|seen| *seen >= earlier.sequence)
+    }
+}
+
+impl Projection {
+    /// Whether `later`'s causal past reaches `sequence` of `actor`: what [`Projection::observes`]
+    /// answers for a record that is not in the index, such as a candidate of a checkpoint's state
+    /// whose record lies below the floor. Answered from the version vectors where `later` has a
+    /// row, else by walking `later`'s retained parents to the records with a row.
+    #[must_use]
+    pub fn reaches(&self, index: &Index, later: &Digest, actor: &Actor, sequence: u64) -> bool {
+        let vectors = &self.vectors;
+        let mut todo = vec![*later];
+        let mut visited = BTreeSet::new();
+        while let Some(id) = todo.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if let Some(row) = vectors.rows.get(&id) {
+                if vectors.reaches(*row, actor, sequence) {
+                    return true;
+                }
+                continue;
+            }
+            match index.records.get(&id) {
+                Some(header) if header.actor == *actor && header.sequence >= sequence => {
+                    return true;
+                }
+                Some(header) => todo.extend(&header.parents),
+                None => {}
+            }
+        }
+        false
+    }
+
+    /// [`Index::observes`] of the projected `index`, answered from the version vectors
+    /// where `later` has a row: then `later` observes exactly the records with a row its
+    /// vector reaches, and nothing else (every ancestor of a record with a row has one).
+    /// Any other `later` (pending, excluded, quarantined, or past the vectors' budget)
+    /// walks its retained parents as [`Index::observes`] does, and stops at each record
+    /// with a row, whose vector answers for everything below it. `index` must be the
+    /// index this projection came from, or one that retains more.
+    #[must_use]
+    pub fn observes(&self, index: &Index, later: &Digest, earlier: &Digest) -> bool {
+        let vectors = &self.vectors;
+        if let Some(row) = vectors.rows.get(later) {
+            return vectors.covers(*row, earlier);
+        }
+        if !index.records.contains_key(later) {
+            return false;
+        }
+        let earlier_discharged = vectors.rows.contains_key(earlier);
+        let mut todo = vec![*later];
+        let mut visited = BTreeSet::new();
+        while let Some(id) = todo.pop() {
+            if !visited.insert(id) {
+                continue;
+            }
+            if &id == earlier {
+                return index.records.contains_key(earlier) || index.floor.contains_key(earlier);
+            }
+            if let Some(row) = vectors.rows.get(&id) {
+                if earlier_discharged && vectors.covers(*row, earlier) {
+                    return true;
+                }
+                continue;
+            }
+            if let Some(header) = index.records.get(&id) {
+                todo.extend(&header.parents);
+            }
+        }
+        false
+    }
 }
 
 impl Index {
@@ -297,8 +577,47 @@ impl Index {
     pub fn new(capacity: usize) -> Self {
         Self {
             records: BTreeMap::new(),
+            frontier: BTreeMap::new(),
             capacity,
+            floor: BTreeMap::new(),
         }
+    }
+
+    /// Admit `record` as a floor record ([`FloorRecord`]). `false` when the index already holds
+    /// that record, retained or as a floor record with the same past. A floor record takes no
+    /// capacity: it stands for history the index does not hold.
+    ///
+    /// # Errors
+    /// [`Refusal::Shape`] for a malformed header or a past that does not include the record's own
+    /// sequence at its actor; [`Refusal::DigestCollision`] for a different header or past under
+    /// an id already held.
+    pub fn insert_floor(&mut self, record: FloorRecord) -> Result<bool, Refusal> {
+        if !record.header.is_shaped()
+            || record.past.get(&record.header.actor) != Some(&record.header.sequence)
+        {
+            return Err(Refusal::Shape);
+        }
+        if let Some(held) = self.records.get(&record.header.id) {
+            return if *held == record.header {
+                Ok(false)
+            } else {
+                Err(Refusal::DigestCollision)
+            };
+        }
+        match self.floor.entry(record.header.id) {
+            Entry::Occupied(old) if *old.get() == record => Ok(false),
+            Entry::Occupied(_) => Err(Refusal::DigestCollision),
+            Entry::Vacant(slot) => {
+                slot.insert(record);
+                Ok(true)
+            }
+        }
+    }
+
+    /// The floor records, by id.
+    #[must_use]
+    pub fn floor(&self) -> &BTreeMap<Digest, FloorRecord> {
+        &self.floor
     }
 
     /// Check admission of a verified header without changing this index.
@@ -390,6 +709,8 @@ impl Index {
             Entry::Vacant(slot) => {
                 let accepted = Self::admit_shaped(&header, None, retained, capacity)?;
                 if accepted {
+                    let highest = self.frontier.entry(header.actor).or_insert(0);
+                    *highest = (*highest).max(header.sequence);
                     slot.insert(header);
                 }
                 Ok(accepted)
@@ -405,6 +726,15 @@ impl Index {
     /// Header by exact content identity.
     pub fn get(&self, id: &Digest) -> Option<&Header> {
         self.records.get(id)
+    }
+
+    /// Each retained actor's highest retained sequence, kept at insert, so a peer's
+    /// summary costs one entry per actor and no scan. A summary, never evidence: it
+    /// says nothing of a gap or a fork below it, which [`Index::forks`] and the
+    /// projection judge, and it never stands for the inventory it summarizes.
+    #[must_use]
+    pub fn frontier(&self) -> &BTreeMap<Actor, u64> {
+        &self.frontier
     }
 
     /// One deterministic witness per conflicting actor. Each pair references
@@ -452,6 +782,31 @@ impl Index {
         false
     }
 
+    /// Every retained record `id` transitively names through retained records: exactly
+    /// the `earlier` other than `id` for which [`Index::observes`]`(id, earlier)` holds,
+    /// found in one walk, so a caller asking that of many records walks once. Empty for
+    /// a record not retained.
+    #[must_use]
+    pub fn ancestors(&self, id: &Digest) -> BTreeSet<Digest> {
+        let mut found = BTreeSet::new();
+        let Some(header) = self.records.get(id) else {
+            return found;
+        };
+        let mut todo = header.parents.clone();
+        while let Some(parent) = todo.pop() {
+            if parent == *id {
+                continue;
+            }
+            let Some(header) = self.records.get(&parent) else {
+                continue;
+            };
+            if found.insert(parent) {
+                todo.extend(&header.parents);
+            }
+        }
+        found
+    }
+
     /// Recompute from the set, withdrawing an equivocating actor AND all its dependents.
     /// Never incrementally accept a winner based on which branch arrived first.
     pub fn project(&self) -> Projection {
@@ -463,10 +818,34 @@ impl Index {
     /// is withheld by the same exact-parent closure as missing or forked history.
     /// The policy must derive from authenticated retained facts, not arrival time.
     pub fn project_excluding(&self, excluded: &BTreeSet<Digest>) -> Projection {
+        let mut actors: BTreeSet<Actor> = self.frontier.keys().copied().collect();
+        for record in self.floor.values() {
+            actors.extend(record.past.keys().copied());
+        }
         let mut out = Projection {
             quarantined: self.forks().into_keys().collect(),
+            vectors: VersionVectors::new(actors.into_iter().collect(), self.records.len()),
             ..Projection::default()
         };
+        // Floor records first, each with the vector it was given and an allowance of its own,
+        // so a wide past is never refused a row: a question crossing the floor has nothing
+        // below it to walk.
+        for record in self.floor.values() {
+            out.vectors.seed(&record.header, &record.past);
+            // A floor record is a head unless another one's past reaches it: every maximal
+            // record of the cut is a floor record, so one that is not maximal is reached.
+            let header = &record.header;
+            let reached = self.floor.values().any(|other| {
+                other.header.id != header.id
+                    && other
+                        .past
+                        .get(&header.actor)
+                        .is_some_and(|seen| *seen >= header.sequence)
+            });
+            if !reached {
+                out.heads.insert(header.id);
+            }
+        }
         let mut waiting = BTreeMap::<Digest, u64>::new();
         let mut children = BTreeMap::<Digest, Vec<Digest>>::new();
         let mut ready = BTreeSet::new();
@@ -476,7 +855,11 @@ impl Index {
                 continue;
             }
             if let Some(previous) = header.previous {
-                let Some(parent) = self.records.get(&previous) else {
+                let Some(parent) = self
+                    .records
+                    .get(&previous)
+                    .or_else(|| self.floor.get(&previous).map(|record| &record.header))
+                else {
                     continue;
                 };
                 if parent.actor != header.actor
@@ -485,11 +868,16 @@ impl Index {
                     continue;
                 }
             }
-            waiting.insert(header.id, header.parents.len() as u64);
-            if header.parents.is_empty() {
+            let below: Vec<&Digest> = header
+                .parents
+                .iter()
+                .filter(|parent| !self.floor.contains_key(*parent))
+                .collect();
+            waiting.insert(header.id, below.len() as u64);
+            if below.is_empty() {
                 ready.insert(header.id);
             }
-            for parent in &header.parents {
+            for parent in below {
                 children.entry(*parent).or_default().push(header.id);
             }
         }
@@ -501,6 +889,7 @@ impl Index {
                 for parent in &header.parents {
                     out.heads.remove(parent);
                 }
+                out.vectors.discharge(header);
             }
             for child in children.get(&id).into_iter().flatten() {
                 if let Some(count) = waiting.get_mut(child) {
@@ -625,6 +1014,14 @@ fn forks_by_actor(headers: &mut [&Header]) -> BTreeMap<Actor, Fork> {
 #[cfg(test)]
 #[path = "sync_batch_tests.rs"]
 mod batch_tests;
+
+#[cfg(test)]
+#[path = "sync_vector_tests.rs"]
+mod vector_tests;
+
+#[cfg(test)]
+#[path = "sync_floor_tests.rs"]
+mod floor_tests;
 
 #[cfg(test)]
 mod tests {
