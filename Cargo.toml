@@ -1,15 +1,17 @@
 # astream — a small, reproducibly-buildable, agent-native message bus.
 # The gate (astream-wire + astream-evidence) is the
-# foundation; the 13 members below are the built system — see README "Layout".
+# foundation; the 15 members below are the built system — see README "Layout".
 #
 # HARD INVARIANT: zero private / git dependencies. Everything resolves from
-# crates.io with a committed Cargo.lock so `cargo build --locked` works from a
-# clean checkout on any runner. This is the headline correctness property.
+# crates.io with a committed Cargo.lock so `targo --unverified build --locked`
+# works from a clean checkout with the Trust toolchain (measured on macOS only).
+# This is the headline correctness property.
 
 [workspace]
 resolver = "2"
 members = [
     "crates/astream-wire",
+    "crates/astream-digest",
     "crates/astream-evidence",
     "crates/astream-term",
     "crates/astream-engine",
@@ -22,26 +24,376 @@ members = [
     "crates/astream-kafka",
     "crates/astream-pump",
     "crates/astream-aead",
+    "crates/astream-sys",
+    "crates/astream-subject-retire",
+    "crates/astream-seccomp-replay",
+    "crates/astream-lease-failover",
+    "crates/astream-ext-authority",
+    "crates/astream-uds-owner",
+    "crates/astream-held-compactor",
+    "crates/astream-speculative-echo",
+    "crates/astream-ordered-barrier",
+    "crates/astream-cross-cells",
+    "crates/astream-self-restart",
+    "crates/astream-metal-damage",
+    "crates/astream-secret-vault",
+    "crates/astream-keybind-chord",
+    "crates/astream-abrew-bottle",
+    "crates/astream-link-cut",
+    "crates/astream-pty-signal",
+    "crates/astream-scrollback-tier",
+    "crates/astream-atpkg-toolchain",
+    "crates/astream-osc-protocol",
+    "crates/astream-fabric-mail",
+    "crates/astream-macos-tcc",
+    "crates/astream-agy-quota",
+    "crates/astream-smt-governor",
+    "crates/astream-tunnel-relay",
+    "crates/astream-sim-fabric",
+    "crates/astream-grapheme-layout",
+    "crates/astream-git-align",
+    "crates/astream-autopilot-ctl",
+    "crates/astream-sys-telemetry",
+    "crates/astream-transcript-idx",
+    "crates/astream-env-scrub",
+    "crates/astream-abrew-pkg",
+    "crates/astream-subagent-dag",
+    "crates/astream-mcp-bridge",
+    "crates/astream-worktree-sync",
+    "crates/astream-wan-delta",
+    "crates/astream-audit-seal",
+    "crates/astream-pty-mux",
+    "crates/astream-quota-sched",
+    "crates/astream-restore-ops",
+    "crates/astream-retire-history",
+    "crates/astream-presence-ext",
+    "crates/astream-cert-auth",
+    "crates/astream-mesh-discovery",
+    "crates/astream-failover-ops",
+    "crates/astream-guards-6",
+    "crates/astream-guards-5",
+    "crates/astream-guards-4",
+    "crates/astream-guards-3",
+    "crates/astream-guards-2",
+    "crates/astream-guards-1",
+    "crates/astream-resync-6",
+    "crates/astream-resync-5",
+    "crates/astream-resync-4",
+    "crates/astream-resync-3",
+    "crates/astream-resync-2",
+    "crates/astream-resync-1",
+    "crates/astream-security-6",
+    "crates/astream-security-5",
+    "crates/astream-security-4",
+    "crates/astream-security-3",
+    "crates/astream-security-2",
+    "crates/astream-security-1",
+    "crates/astream-cognition-6",
+    "crates/astream-cognition-5",
+    "crates/astream-cognition-4",
+    "crates/astream-cognition-3",
+    "crates/astream-cognition-2",
+    "crates/astream-cognition-1",
+    "crates/astream-storage-6",
+    "crates/astream-storage-5",
+    "crates/astream-storage-4",
+    "crates/astream-storage-3",
+    "crates/astream-storage-2",
+    "crates/astream-storage-1",
+    "crates/astream-routing-6",
+    "crates/astream-routing-5",
+    "crates/astream-routing-4",
+    "crates/astream-routing-3",
+    "crates/astream-routing-2",
+    "crates/astream-routing-1",
+    "crates/astream-leases-6",
+    "crates/astream-leases-5",
+    "crates/astream-leases-4",
+    "crates/astream-leases-3",
+    "crates/astream-leases-2",
+    "crates/astream-leases-1",
+    "crates/astream-flow-6",
+    "crates/astream-flow-5",
+    "crates/astream-flow-4",
+    "crates/astream-flow-3",
+    "crates/astream-flow-2",
+    "crates/astream-flow-1",
+    "crates/astream-coalesce-6",
+    "crates/astream-coalesce-5",
+    "crates/astream-coalesce-4",
+    "crates/astream-coalesce-3",
+    "crates/astream-coalesce-2",
+    "crates/astream-coalesce-1",
+    "crates/astream-integrity-6",
+    "crates/astream-integrity-5",
+    "crates/astream-integrity-4",
+    "crates/astream-integrity-3",
+    "crates/astream-integrity-2",
+    "crates/astream-integrity-1",
+    "crates/astream-protocol-6",
+    "crates/astream-protocol-5",
+    "crates/astream-protocol-4",
+    "crates/astream-protocol-3",
+    "crates/astream-protocol-2",
+    "crates/astream-protocol-1",
+    "crates/astream-cap-ext",
+    "crates/astream-fabric-ops",
+    "crates/astream-fabric",
+    "crates/astream-session-ops",
+    "crates/astream-vt-ext",
 ]
 # NOTE: a `verify/` workspace will live in a SEPARATE workspace and must never
 # appear in these members — the evidence gate enforces this (see gate.rs).
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/alabsystems/astream"
 authors = ["Andrew Yates"]
 # 1.89 is the floor `BrokerLog` needs for `File::try_lock`/`unlock` (the exclusive
-# log lock); the toolchain is pinned at 1.95 in rust-toolchain.toml.
+# log lock); the toolchain itself is Trust (rust-toolchain.toml).
 rust-version = "1.89"
 
+[workspace.metadata.atpkg]
+# Ship the two public CLIs, not the workspace's evidence or fixture binaries.
+expose = ["asb", "aspump"]
+# Keep the CLI's optional security transports available without compiling the
+# embedding-only `astream-broker/stream` interface or unrelated workspace tools.
+build-args = [
+    "--locked",
+    "-p", "astream-broker", "-p", "astream-pump",
+    "--bin", "asb", "--bin", "aspump",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback,astream-pump/cap,astream-pump/identity",
+]
+
+# What a package of main is held to before aterm's tip lane (`atpkg-publish lane run tip`)
+# stages it: the checks build 1383 was cut under on 2026-11-12, in that order. The source
+# steps run in the frozen checkout, the build is the pack itself (`build-args` above), and
+# the packed steps run the packed `asb` and `aspump` from a scratch directory outside it.
+# Each step passes only if it exits 0 within `within-secs` with at least `min-tests` libtest
+# passes. `within-secs` is a hang guard, not a speed test: a step that runs `targo` queues for
+# this Mac's build admission behind every other session's build, and that wait counts against
+# the bound (the same 29 s step has taken over 180 s). So each such step and the build carry
+# three times the longest run seen and never under an hour; `fmt` and the packed steps, which
+# do not queue, carry 600 s and 120 s. The feature list is `build-args`'.
+[[workspace.metadata.atpkg.qualify]]
+name = "fmt"
+stage = "source"
+run = ["targo", "fmt", "--all", "--", "--check"]
+within-secs = 600
+
+[[workspace.metadata.atpkg.qualify]]
+name = "tippy"
+stage = "source"
+run = [
+    "targo", "tippy", "--locked",
+    "-p", "astream-broker", "-p", "astream-pump", "-p", "astream-aead",
+    "--all-targets",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback,astream-pump/cap,astream-pump/identity",
+    "--", "-D", "warnings",
+]
+within-secs = 3600
+
+# The unit tests of the eight libraries the two binaries link.
+[[workspace.metadata.atpkg.qualify]]
+name = "shipping-libraries"
+stage = "source"
+run = [
+    "targo", "--unverified", "test", "--locked",
+    "-p", "astream-broker", "-p", "astream-pump", "-p", "astream-aead", "-p", "astream-term",
+    "-p", "astream-sys", "-p", "astream-wire", "-p", "astream-cap", "-p", "astream-digest",
+    "--lib",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback,astream-pump/cap,astream-pump/identity",
+]
+within-secs = 3600
+min-tests = 830
+
+[[workspace.metadata.atpkg.qualify]]
+name = "asb-unit"
+stage = "source"
+run = [
+    "targo", "--unverified", "test", "--locked", "-p", "astream-broker", "--bin", "asb",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback",
+]
+within-secs = 3600
+min-tests = 12
+
+# The broker's and the pump's whole `suite` binaries, at the eight test threads the cut's
+# green run used: at the default thread count on a loaded Mac two replication cases failed
+# once. It holds the certified transport, the `aspump` CLI, the `asb` regressions and the
+# sixteen-subscriber fan-out the cut also ran by name.
+[[workspace.metadata.atpkg.qualify]]
+name = "suite"
+stage = "source"
+run = [
+    "targo", "--unverified", "test", "--locked", "-p", "astream-broker", "-p", "astream-pump",
+    "--test", "suite",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback,astream-pump/cap,astream-pump/identity",
+    "--", "--test-threads=8",
+]
+within-secs = 3600
+min-tests = 500
+
+[[workspace.metadata.atpkg.qualify]]
+name = "sticky"
+stage = "source"
+run = [
+    "targo", "--unverified", "test", "--locked", "-p", "astream-broker",
+    "--test", "sticky_and_refill",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback",
+]
+within-secs = 3600
+min-tests = 4
+
+[[workspace.metadata.atpkg.qualify]]
+name = "other-targets"
+stage = "source"
+run = [
+    "targo", "--unverified", "test", "--locked", "-p", "astream-broker", "-p", "astream-pump",
+    "--test", "cli_status_and_range", "--test", "replicated", "--test", "sharded",
+    "--test", "distributed_workflow",
+    "--features",
+    "astream-broker/identity,astream-broker/relay,astream-broker/anti-rollback,astream-pump/cap,astream-pump/identity",
+]
+within-secs = 3600
+min-tests = 29
+
+# astream-aead as its own default features build it, which the feature list above does not.
+[[workspace.metadata.atpkg.qualify]]
+name = "aead-default"
+stage = "source"
+run = ["targo", "--unverified", "test", "--locked", "-p", "astream-aead", "--lib"]
+within-secs = 3600
+min-tests = 34
+
+[[workspace.metadata.atpkg.qualify]]
+name = "build"
+stage = "build"
+within-secs = 3600
+
+[[workspace.metadata.atpkg.qualify]]
+name = "asb-version"
+stage = "packed"
+run = ["{bin}/asb", "--version"]
+within-secs = 120
+
+[[workspace.metadata.atpkg.qualify]]
+name = "asb-help"
+stage = "packed"
+run = ["{bin}/asb", "--help"]
+within-secs = 120
+
+[[workspace.metadata.atpkg.qualify]]
+name = "aspump-version"
+stage = "packed"
+run = ["{bin}/aspump", "--version"]
+within-secs = 120
+
+[[workspace.metadata.atpkg.qualify]]
+name = "aspump-help"
+stage = "packed"
+run = ["{bin}/aspump", "--help"]
+within-secs = 120
+
+# The four refusals: each must exit 2 and name what it refused, and a refused `serve` must
+# not have created its log.
+[[workspace.metadata.atpkg.qualify]]
+name = "asb-invalid-flag"
+stage = "packed"
+run = ["/bin/sh", "-c", '''
+out=$("{bin}/asb" serve absent.sock --unknown 2>&1 </dev/null); [ $? -eq 2 ] || exit 1
+printf '%s\n' "$out" | grep -qF -- 'unknown'
+''']
+within-secs = 120
+
+[[workspace.metadata.atpkg.qualify]]
+name = "aspump-invalid-dim"
+stage = "packed"
+run = ["/bin/sh", "-c", '''
+out=$("{bin}/aspump" absent.sock s1 --cols 0 2>&1 </dev/null); [ $? -eq 2 ] || exit 1
+printf '%s\n' "$out" | grep -qF -- '--cols'
+''']
+within-secs = 120
+
+[[workspace.metadata.atpkg.qualify]]
+name = "asb-refuses-plaintext"
+stage = "packed"
+run = ["/bin/sh", "-c", '''
+d=$(mktemp -d) || exit 1; trap 'rm -rf "$d"' EXIT
+out=$("{bin}/asb" serve "$d/denied.log" --listen tcp:127.0.0.1:0 2>&1 </dev/null); [ $? -eq 2 ] || exit 1
+printf '%s\n' "$out" | grep -qF -- '--allow-plaintext' || exit 1
+[ ! -e "$d/denied.log" ]
+''']
+within-secs = 120
+
+[[workspace.metadata.atpkg.qualify]]
+name = "asb-certified-needs-identity"
+stage = "packed"
+run = ["/bin/sh", "-c", '''
+d=$(mktemp -d) || exit 1; trap 'rm -rf "$d"' EXIT
+out=$("{bin}/asb" serve "$d/denied.log" --listen certified:127.0.0.1:0 2>&1 </dev/null); [ $? -eq 2 ] || exit 1
+printf '%s\n' "$out" | grep -qF -- '--host-cert-file' || exit 1
+[ ! -e "$d/denied.log" ]
+''']
+within-secs = 120
+
+# One packed broker on a Unix socket: it starts, takes two records, refuses a replayed
+# sequence as a duplicate, returns both records byte for byte, and wakes a packed `aspump`
+# on a shell prompt mark.
+[[workspace.metadata.atpkg.qualify]]
+name = "broker-session"
+stage = "packed"
+run = ["/bin/sh", "-c", '''
+set -u
+d=$(mktemp -d) || exit 1; cd "$d" || exit 1
+"{bin}/asb" serve "$d/s" "$d/broker.log" > broker.out 2> broker.err </dev/null & broker=$!
+trap 'kill $broker 2>/dev/null; cd /; rm -rf "$d"' EXIT
+i=0; until [ -s broker.out ]; do i=$((i+1)); [ $i -le 150 ] || exit 1; sleep 0.1; done
+[ "$(head -1 broker.out)" = "listening $d/s" ] || exit 1
+subject=/a/stream/release/bytes
+[ "$(printf 'hello\0world\nsecond' | "{bin}/asb" pub "$d/s" $subject --id 1 --seq 1)" = '0 new' ] || exit 1
+[ "$(printf '\n\0tail' | "{bin}/asb" pub "$d/s" $subject --id 1 --seq 2)" = '1 new' ] || exit 1
+[ "$(printf 'changed' | "{bin}/asb" pub "$d/s" $subject --id 1 --seq 2)" = '1 dup' ] || exit 1
+"{bin}/asb" fetch "$d/s" $subject --max 2 > fetched </dev/null || exit 1
+printf '0 18 %s\nhello\0world\nsecond\n1 6 %s\n\n\0tail\nMARK next=2 head=2\n' $subject $subject > expected
+cmp -s fetched expected || exit 1
+"{bin}/aspump" "$d/s" release --from 0 --once > pump.out 2> pump.err </dev/null & pump=$!
+sleep 1
+[ "$(printf '\033]133;A\007$ ' | "{bin}/asb" pub "$d/s" /a/stream/term/release/out --id 2 --seq 1)" = '2 new' ] || exit 1
+wait $pump || exit 1
+[ "$(cat pump.out)" = 'PROMPT_READY boffset=2' ]
+''']
+within-secs = 120
+
 [workspace.dependencies]
-astream-wire = { path = "crates/astream-wire", version = "0.1.0" }
+astream-wire = { path = "crates/astream-wire", version = "0.2.0" }
+astream-digest = { path = "crates/astream-digest", version = "0.2.0" }
+# astream-broker's sibling crates are declared HERE, with the version crates.io
+# requires beside `path`, because `pub bump` moves only the ROOT manifest's
+# intra-workspace requirements. A requirement left in a member manifest does not
+# move, and the bumped workspace stops resolving (measured 2026-09-29: broker's
+# `astream-aead = "^0.1.0"` against a 0.2.0 crate, so `pub bump` undid itself).
+astream-cap = { path = "crates/astream-cap", version = "0.2.0" }
+# Default features off: a member names the sealed stream (`astream-aead/stream`) when it
+# speaks the sealed wire, so seal/open alone compiles none of it.
+astream-aead = { path = "crates/astream-aead", version = "0.2.0", default-features = false }
+# The OS cordon (F_BARRIERFSYNC, the boot session id, the owner-only file rule): zero
+# dependencies, its only unsafe confined to two modules, cfg(target_vendor = "apple")
+# and cfg(unix).
+astream-sys = { path = "crates/astream-sys", version = "0.2.0" }
+astream-broker = { path = "crates/astream-broker", version = "0.2.0" }
+astream-term = { path = "crates/astream-term", version = "0.2.0" }
+astream-effects = { path = "crates/astream-effects", version = "0.2.0" }
 # Third-party (crates.io only — no git, no path-to-private):
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"
-sha2 = "0.10"
 proptest = "1.5"
 
 [profile.release]

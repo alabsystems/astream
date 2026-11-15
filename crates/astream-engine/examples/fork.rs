@@ -7,13 +7,25 @@
 //! assert panics (non-zero exit), so the asserts gate the run; success prints one
 //! deterministic line whose SHA-256 the manifest pins.
 
-use astream_engine::{fork_swap, record_session, Offset};
+use astream_engine::{try_fork_swap, Disk, Effects, Log, Offset, Seeded};
 use astream_term::{screen, Record};
 use astream_wire::fnv1a_64;
 
 const SEED: u64 = 0xF02C;
 const COLS: u16 = 40;
 const ROWS: u16 = 6;
+
+/// Record a session into log bytes under a seeded seam; a record that does not
+/// append fails the run.
+fn record_session(seed: u64, records: &[Record]) -> Vec<u8> {
+    let mut fx = Seeded::new(seed);
+    let mut log = Log::new();
+    for rec in records {
+        log.append(&mut fx, rec.clone())
+            .expect("every session record appends");
+    }
+    fx.disk().read_all().to_vec()
+}
 
 /// An agent session: it ran a build, the world answered, it reacted.
 fn agent_session() -> Vec<Record> {
@@ -40,11 +52,12 @@ fn main() {
     let orig_screen = screen::fold(COLS, ROWS, &original);
 
     // Counterfactual: fork at offset 2 and inject the build the agent did NOT see.
-    let alt = fork_swap(
+    let alt = try_fork_swap(
         &original,
         Offset(2),
         Record::Out(b"BUILD OK: 0 errors\r\n".to_vec()),
-    );
+    )
+    .expect("offset 2 is in range");
     let alt_log = record_session(SEED, &alt);
     let alt_screen = screen::fold(COLS, ROWS, &alt);
 

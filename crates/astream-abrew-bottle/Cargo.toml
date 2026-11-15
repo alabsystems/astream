@@ -1,0 +1,12 @@
+[package]
+name = "astream-abrew-bottle"
+description = "An independent model of `atpkg-abrew` native compatibility guards refusing `--real`/`--no-reroute`/`ABREW_REAL`, confining unpack paths to the `atpkg` prefix, sealing bottle SHA-256 digests, routing supported casks, scoping `bundle`, and latching disabled stubs; no astream runtime crate and no aterm code calls it. abrew is aterm's own code, its `atpkg` crate. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

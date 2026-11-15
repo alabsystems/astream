@@ -1,0 +1,12 @@
+[package]
+name = "astream-tunnel-relay"
+description = "An independent model of HTTP `CONNECT` corporate-proxy framing, multiplexed stream credit flow control, HMAC-SHA256 NAT-traversal relay tickets, strict ALPN protocol version negotiation, `Closer` half-close TCP drain, and `SealedStream` record-aligned splice sizing; no astream runtime crate and no aterm code calls it. The shipped `Closer` is `astream-broker`'s client and `SealedStream` is `astream-aead`'s. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

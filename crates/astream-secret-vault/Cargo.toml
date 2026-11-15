@@ -1,0 +1,12 @@
+[package]
+name = "astream-secret-vault"
+description = "An independent model of an ephemeral secret-lease scrub tracker, `astream-cap` `exp=` attenuation verifier, `REQUIREMENTS R6` `n-<hash>` identity-to-principal pin, monotone revocation filter, per-tab SSH-agent sign budget, and bearer-token log redactor; no astream runtime crate and no aterm code calls it. The shipped `exp=` attenuation is `astream-cap`'s, and the identity-to-principal binding and revocation are `astream-broker`'s. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

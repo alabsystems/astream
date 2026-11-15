@@ -6,7 +6,7 @@
 //! a regression gate, not a cross-system comparison.
 //!
 //! Run with `--release` for representative numbers:
-//!   cargo run --release -p astream-term --example term_microbench
+//!   targo --unverified run --release -p astream-term --example term_microbench
 
 use astream_term::{screen, Record};
 use std::hint::black_box;

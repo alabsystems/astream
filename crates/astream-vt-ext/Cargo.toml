@@ -1,0 +1,12 @@
+[package]
+name = "astream-vt-ext"
+description = "An independent model of modern VT and aterm terminal protocol extensions: soft-wrap grid reflow, OSC 8 hyperlinks, Kitty progressive keyboard, OSC 133 shell marks, OSC 52 clipboard guard, NEEDS YOU directives, and bracketed-paste sanitization; no astream runtime crate and no aterm code calls it. aterm's terminal handles these sequences in its own code, and astream's shipped VT fold is `astream-term`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-term = { workspace = true }

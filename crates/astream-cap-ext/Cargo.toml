@@ -1,0 +1,15 @@
+[package]
+name = "astream-cap-ext"
+description = "An independent model of offline Macaroon sub-agent capability delegation, provenance chains, TOFU host pinning, forward-secret HChaCha20 symmetric ratcheting, agent receipt adapters, quota pools, and restart handoffs; no astream runtime crate and no aterm code calls it. The shipped Macaroon attenuation is `astream-cap`'s, and the shipped HChaCha20 subkey `astream-aead`'s. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-digest = { workspace = true }
+astream-cap = { workspace = true }
+astream-aead = { workspace = true }

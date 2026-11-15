@@ -1,0 +1,11 @@
+[package]
+name = "astream-flow-2"
+description = "An independent model of adaptive flow control, backpressure horizons, session multiplexing, and replay determinism (shard 2 of 6, batches 63..64); no astream runtime crate and no aterm code calls it. `aterm harness agy` is `aterm-agent`'s `harness::agy_quota`, aterm's Autopilot is `aterm-agent`'s harness, and its privacy and `syspolicyd` guards are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

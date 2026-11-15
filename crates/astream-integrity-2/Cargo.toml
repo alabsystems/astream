@@ -1,0 +1,11 @@
+[package]
+name = "astream-integrity-2"
+description = "An independent model of segment chains, Merkle accumulators, nonce challenges, selftest pins, and transport guards (shard 2 of 6, batches 39..40); no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

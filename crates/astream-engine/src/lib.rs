@@ -35,28 +35,79 @@
 //! have no dependencies of their own. The record envelope lives here because the
 //! engine is the first layer that owns offsets and a clock.
 
+// A contracted fn is written once, through `contract_fn!`: under a Trust compiler
+// (`cfg(clean_islands)`, build.rs) it carries its `ensures` clause, which no stock rustc can
+// parse, and every other compiler gets the plain fn.
+#[macro_use]
+#[path = "../../astream-wire/contract_fn.rs"]
+mod contract_fn;
+
+// Plain-Rust twins of the functions this crate's Clean islands compile, for a compiler
+// that cannot lex the islands.
+#[cfg(any(test, not(clean_islands)))]
+mod twins;
+
 pub mod control;
+pub mod dag;
+pub mod distributed;
 pub mod durable;
 pub mod effects;
 pub mod envelope;
 pub mod fleet;
 pub mod fork;
 pub mod log;
+pub mod merkle;
 pub mod session;
 pub mod store;
 
 pub use astream_wire::Offset;
-pub use control::ControlToken;
-pub use durable::{scan_steps, StepScan, WorkflowJournal, STEP_VERSION};
-pub use effects::{Clock, Disk, Effects, LogicalClock, MemDisk, Net, Rng, Seeded, SplitMix64};
-pub use envelope::{CausedBy, Envelope, EnvelopeError, ENV_VERSION};
+pub use control::{control_handoff_holder, holder_matches, ControlToken};
+pub use dag::{
+    dag_committed_advance, dag_deps_satisfied, decode_dag_record, encode_dag_record, DagError,
+    DagJournal, DagJournalFault, DagSpec, DagStep, DAG_HEADER_LEN, DAG_RECORD_MAGIC,
+    DAG_RECORD_VERSION,
+};
+pub use distributed::{
+    decode_lease_record, dist_lease_expired, dist_lease_expiry_advance, dist_winner_offset_min,
+    encode_lease_record, ActiveLease, BusRecord, DistributedDag, DistributedFault,
+    DistributedStepOutcome, DistributedWorkflow, InMemoryWorkflowBus, WorkflowBus, DIST_LEASE_LEN,
+    DIST_LEASE_MAGIC, DIST_LEASE_VERSION, MAX_DISTRIBUTED_STEPS, MAX_WORKFLOW_PREFIX_BYTES,
+};
+pub use durable::{
+    journal_admit_step_commit, journal_committed_monotone, journal_step_match_or_keep, scan_steps,
+    step_matches_next, StepScan, WorkflowJournal, STEP_VERSION,
+};
+pub use effects::{
+    logical_clock_advance_past_tick, logical_clock_at_max, Clock, Disk, Effects, LogicalClock,
+    MemDisk, Net, Rng, Seeded, SplitMix64,
+};
+pub use envelope::{
+    envelope_clamp_cause_len, envelope_version_valid, CausedBy, Envelope, EnvelopeError,
+    ENV_VERSION,
+};
 pub use fleet::{
-    cross_edges_from_logs, cut_includes, is_consistent, replay_to_cut, CrossEdge, Cut, CutReplay,
-    Partition,
+    cross_edges_from_logs, cut_includes, first_violation, fleet_clamp_to_cut, fleet_seq_within_cut,
+    heal_cut, is_consistent, materialize_fleet_cut, replay_to_cut, resume_fleet_cut, CrossEdge,
+    Cut, CutReplay, FleetError, FleetPartitionState, FleetSnapshot, Partition,
 };
-pub use fork::{fork_swap, record_session, try_fork_swap};
-pub use log::{EngineError, Log, LogReader, ReadError};
+pub use fork::{fork_clamped_index, fork_index_in_bounds, try_fork_swap};
+pub use log::{
+    log_advance_offset_monotone, log_same_log_cause_valid, EngineError, Log, LogReader, ReadError,
+};
+pub use merkle::{
+    compute_node_hash, diff_chains, lca, merge_input_branches, merkle_offset_matches,
+    merkle_parent_count_clamp, CommitHash, MergeSide, MerkleChain, MerkleDiff, MerkleError,
+    MerkleNode, MAX_MERKLE_PARENTS,
+};
 pub use session::{
-    high_water_from_log, materialize, resume, try_materialize, Session, StateSnapshot,
+    high_water_from_log, materialize, resume, session_bump_high_water, session_seq_is_duplicate,
+    try_materialize, Session, StateSnapshot,
 };
-pub use store::{recover, FaultKind, FileLog, LogFault, RecoverReport, Tail};
+pub use store::{
+    recover, store_advance_valid_len, store_seq_matches_expected, FaultKind, FileLog, LogFault,
+    Poisoned, RecoverReport, Tail,
+};
+
+#[cfg(test)]
+#[path = "metadata_validation_tests.rs"]
+mod metadata_validation_tests;

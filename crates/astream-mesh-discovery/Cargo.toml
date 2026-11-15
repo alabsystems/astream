@@ -1,0 +1,12 @@
+[package]
+name = "astream-mesh-discovery"
+description = "An independent model of automatic multi-region federation mesh routing, SWIM-style incarnation peer discovery, EWMA RTT gateway selection, path-vector loop prevention, BDP WAN pacing, and graceful gateway drain; no astream runtime crate and no aterm code calls it. The shipped cross-broker federation is `astream-broker`'s `federation.rs`, and aterm's bus is one machine's. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }

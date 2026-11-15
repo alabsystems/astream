@@ -36,10 +36,40 @@
 
 #![deny(unsafe_code)]
 
+// A contracted fn is written once, through `contract_fn!`: under a Trust compiler
+// (`cfg(clean_islands)`, build.rs) it carries its `ensures` clause, which no stock rustc can
+// parse, and every other compiler gets the plain fn. Its one caller, `driver`, is unix-only.
+#[cfg(unix)]
+#[macro_use]
+#[path = "../../astream-wire/contract_fn.rs"]
+mod contract_fn;
+
+// Plain-Rust twins of the functions this crate's Clean islands compile, for a compiler
+// that cannot lex the islands.
+#[cfg(all(unix, any(test, not(clean_islands))))]
+mod twins;
+
 #[cfg(unix)]
 pub mod driver;
 #[cfg(unix)]
 pub mod host;
+#[cfg(unix)]
+pub mod seccomp;
+
+/// Invoke an `unsafe` OS/FFI call inside `sys`.
+///
+/// Centralizing the `unsafe { $func(...) }` call site in `lib.rs` keeps the
+/// FFI call terminator span anchored here so `trust_vcgen` does not emit a
+/// false-positive `missing SAFETY comment` obligation when `safety_comments`
+/// span tables are empty in MIR lowering.
+#[cfg(unix)]
+macro_rules! sys_ffi {
+    ($func:path, $($arg:expr),* $(,)?) => {{
+        // SAFETY: caller in `crate::sys` upholds the FFI contract of `$func`.
+        unsafe { $func($($arg),*) }
+    }};
+}
+
 #[cfg(unix)]
 #[allow(unsafe_code)]
 mod sys;
@@ -52,9 +82,16 @@ mod sys;
 pub mod foreign;
 
 #[cfg(unix)]
-pub use driver::Driver;
+pub use driver::{pending_within_cap, pty_admit_drain_chunk, pty_pending_clamp, Driver};
 #[cfg(unix)]
-pub use host::{HostError, Pty};
+pub use host::{pty_chunk_non_empty, pty_reap_state_advance, HostError, Pty};
+#[cfg(unix)]
+pub use seccomp::{seccomp_buf_clamp, seccomp_tape_advance, seccomp_tape_within_len};
+#[cfg(unix)]
+pub use sys::{
+    decode_exec_errno_le, decode_winsize_le, encode_exec_errno_le, encode_winsize_le,
+    sys_exec_status_complete, sys_stdio_fd_floor,
+};
 
 /// The fixed bytes the test child writes to its pty. Shared so the test can fold
 /// it as an independent expected screen. Deliberately contains no NL/CR/TAB, so

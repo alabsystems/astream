@@ -7,6 +7,6 @@ project = "fixture-env-path"
 id = "env.path.fine"
 kind = "bench"
 text = "Throughput holds its floor."
-command = "OUT_DIR=target/bench-out cargo bench --locked"
+command = "OUT_DIR=target/bench-out targo --unverified bench --locked"
 metric = "ops"
 min_value = 1.0

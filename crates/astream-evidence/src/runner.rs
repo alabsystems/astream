@@ -4,10 +4,10 @@
 //! `expected_output_sha` is pinned, its stdout hashes to that value. This is
 //! how astream reports evidence: never a stored boolean, always a re-run.
 
-use crate::manifest::{cargo_subcommand, Claim};
-use sha2::{Digest, Sha256};
+use crate::manifest::{targo_subcommand, Claim};
+use crate::timeout::{effective_claim_timeout_ms, run_command_with_timeout, BoundedCommandOutput};
+use astream_digest::Sha256;
 use std::path::Path;
-use std::process::Command;
 
 /// The outcome of running one claim.
 #[derive(Debug, Clone)]
@@ -23,8 +23,8 @@ pub struct ClaimResult {
     pub metric_value: Option<f64>,
     pub note: String,
     /// For a claim that ran and FAILED, the last [`FAILURE_TAIL_LINES`] lines of
-    /// its stdout (the final attempt's, for a re-measured bench), so the failure
-    /// can be diagnosed from the run's log. Empty for a pass or a skip.
+    /// its stdout, so the failure can be diagnosed from the run's log.
+    /// Empty for a pass or a skip.
     pub stdout_tail: String,
     /// The same tail of the failing command's stderr.
     pub stderr_tail: String,
@@ -36,6 +36,20 @@ pub const FAILURE_TAIL_LINES: usize = 60;
 /// Byte cap on each kept tail, so one enormous line cannot flood the report.
 pub const FAILURE_TAIL_BYTES: usize = 16 * 1024;
 
+fn utf8_lossy_clean(bytes: &[u8]) -> String {
+    if let Ok(s) = core::str::from_utf8(bytes) {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(chunk.valid());
+        if !chunk.invalid().is_empty() {
+            out.push('\u{FFFD}');
+        }
+    }
+    out
+}
+
 /// The last `n` lines of `bytes` (a trailing newline does not count as a line),
 /// at most [`FAILURE_TAIL_BYTES`] of them, decoded lossily.
 pub fn tail_lines(bytes: &[u8], n: usize) -> String {
@@ -43,16 +57,25 @@ pub fn tail_lines(bytes: &[u8], n: usize) -> String {
     // The last `n` lines start just past the n-th newline from the end.
     let start = match n.checked_sub(1) {
         None => body.len(),
-        Some(k) => body
-            .iter()
-            .enumerate()
-            .rev()
-            .filter(|&(_, &b)| b == b'\n')
-            .nth(k)
-            .map_or(0, |(i, _)| i + 1),
+        Some(k) => {
+            let mut newlines = 0usize;
+            let mut found = 0usize;
+            let mut idx = body.len();
+            while idx > 0 {
+                idx -= 1;
+                if matches!(body.get(idx), Some(b'\n')) {
+                    if newlines == k {
+                        found = idx.saturating_add(1);
+                        break;
+                    }
+                    newlines = newlines.saturating_add(1);
+                }
+            }
+            found
+        }
     };
     let start = start.max(body.len().saturating_sub(FAILURE_TAIL_BYTES));
-    String::from_utf8_lossy(&body[start..]).into_owned()
+    utf8_lossy_clean(body.get(start..).unwrap_or(&[]))
 }
 
 /// Extract the value from a `METRIC <name> <value>` line in `stdout`.
@@ -76,21 +99,24 @@ pub fn extract_metric(stdout: &str, name: &str) -> Option<f64> {
 }
 
 /// Sum the `passed` counts across every libtest `test result:` summary line in
-/// `stdout`. Used to reject a `kind = "test"` claim, or any `cargo test`
-/// command, whose run counted **zero** tests (a vacuous filter that matches
+/// `stdout`. Used to reject a `kind = "test"` claim, or any `targo <lane>
+/// test` command, whose run counted **zero** tests (a vacuous filter that matches
 /// nothing exits 0 and would otherwise be green theater).
 pub fn count_passed_tests(stdout: &str) -> u64 {
     let mut total = 0u64;
     for line in stdout.lines() {
         // "test result: ok. 12 passed; 0 failed; ..."
         if let Some(rest) = line.split("test result:").nth(1) {
-            let toks: Vec<&str> = rest.split_whitespace().collect();
-            for w in toks.windows(2) {
-                if w[1].starts_with("passed") {
-                    if let Ok(n) = w[0].parse::<u64>() {
-                        total += n;
+            let mut prev: Option<&str> = None;
+            for tok in rest.split_whitespace() {
+                if tok.starts_with("passed") {
+                    if let Some(first) = prev {
+                        if let Ok(n) = first.parse::<u64>() {
+                            total = total.saturating_add(n);
+                        }
                     }
                 }
+                prev = Some(tok);
             }
         }
     }
@@ -99,99 +125,109 @@ pub fn count_passed_tests(stdout: &str) -> u64 {
 
 /// Lowercase hex SHA-256 of `bytes`.
 pub fn sha256_hex(bytes: &[u8]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(bytes);
-    let digest = hasher.finalize();
+    const HEX: [char; 16] = [
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+    ];
+    let digest = Sha256::digest_slice(bytes);
     let mut out = String::with_capacity(64);
-    for b in digest {
-        out.push_str(&format!("{b:02x}"));
+    let mut rest = digest.as_slice();
+    while let &[b, ref tail @ ..] = rest {
+        out.push(HEX[((b >> 4) & 0xF) as usize]);
+        out.push(HEX[(b & 0xF) as usize]);
+        rest = tail;
     }
     out
 }
 
-/// How many times a BENCH claim that fell short of its bound may be re-measured.
-///
-/// A throughput floor is a one-sided measurement: CPU contention can only make it
-/// SLOWER, never faster. So a single sample taken while the machine happens to be busy
-/// says nothing about whether the code regressed — it says the machine was busy, and a
-/// gate whose greenness depends on nothing else running on the box eventually cries
-/// wolf and gets ignored.
-///
-/// Taking the BEST of a few samples is therefore the honest estimator of what this
-/// machine can do, and it does NOT weaken the gate: a real regression depresses every
-/// sample, so the best of them is still below the floor and the claim still fails. What
-/// it removes is only the failure mode where a green gate depends on an idle machine.
-const BENCH_ATTEMPTS: usize = 3;
+/// Four-byte magic prefix (`"AECR"`) for a 20-byte runner claim report wire header.
+pub const CLAIM_REPORT_WIRE_MAGIC: [u8; 4] = *b"AECR";
 
-/// Run `c`'s command, re-measuring a BENCH claim that missed its bound up to
-/// [`BENCH_ATTEMPTS`] times and keeping the best sample (see that constant for why this
-/// is honest rather than a way to buy a pass). A claim that meets its bound on the first
-/// run is never re-run, so this costs nothing on a healthy tree. Non-bench claims, and
-/// bench claims with no numeric bound, run exactly once — a `test` claim is not a
-/// measurement and retrying one would only hide a flaky test, which the project wants
-/// to see rather than paper over.
-///
-/// Returns the kept (best) sample, and the final attempt when that is a different run
-/// — the output a failure report shows.
-fn run_with_bench_retry(
+/// Wire format version for runner claim report wire headers.
+pub const CLAIM_REPORT_WIRE_VERSION: u8 = 1;
+
+/// Encode a 20-byte runner claim report wire header:
+/// `[0..4] = b"AECR"`, `[4] = version (1)`, `[5] = passed (0/1)`, `[6] = skipped (0/1)`,
+/// `[7] = kind_tag` (`0 = test`, `1 = bench`, `2 = cmd`),
+/// `[8..12] = exit_code (BE)`, `[12..20] = passed_tests (BE)`.
+#[must_use]
+pub const fn encode_claim_report_wire(
+    passed: bool,
+    skipped: bool,
+    kind_tag: u8,
+    exit_code: u32,
+    passed_tests: u64,
+) -> Option<[u8; 20]> {
+    let pass_tag = passed as u8;
+    let skip_tag = skipped as u8;
+    let out = [
+        CLAIM_REPORT_WIRE_MAGIC[0],
+        CLAIM_REPORT_WIRE_MAGIC[1],
+        CLAIM_REPORT_WIRE_MAGIC[2],
+        CLAIM_REPORT_WIRE_MAGIC[3],
+        CLAIM_REPORT_WIRE_VERSION,
+        pass_tag,
+        skip_tag,
+        kind_tag,
+        ((exit_code >> 24) & 0xFF) as u8,
+        ((exit_code >> 16) & 0xFF) as u8,
+        ((exit_code >> 8) & 0xFF) as u8,
+        (exit_code & 0xFF) as u8,
+        ((passed_tests >> 56) & 0xFF) as u8,
+        ((passed_tests >> 48) & 0xFF) as u8,
+        ((passed_tests >> 40) & 0xFF) as u8,
+        ((passed_tests >> 32) & 0xFF) as u8,
+        ((passed_tests >> 24) & 0xFF) as u8,
+        ((passed_tests >> 16) & 0xFF) as u8,
+        ((passed_tests >> 8) & 0xFF) as u8,
+        (passed_tests & 0xFF) as u8,
+    ];
+    if kind_tag > 2 || (passed && skipped) || (passed && exit_code != 0) {
+        return None;
+    }
+    Some(out)
+}
+
+/// Decode a 20-byte runner claim report wire header into
+/// `(passed, skipped, kind_tag, exit_code, passed_tests)`.
+#[must_use]
+pub const fn decode_claim_report_wire(buf: &[u8]) -> Option<(bool, bool, u8, u32, u64)> {
+    let [b'A', b'E', b'C', b'R', CLAIM_REPORT_WIRE_VERSION, pass_tag, skip_tag, kind_tag, e0, e1, e2, e3, p0, p1, p2, p3, p4, p5, p6, p7, ..] =
+        *buf
+    else {
+        return None;
+    };
+    let exit_code = ((e0 as u32) << 24) | ((e1 as u32) << 16) | ((e2 as u32) << 8) | (e3 as u32);
+    let passed_tests = ((p0 as u64) << 56)
+        | ((p1 as u64) << 48)
+        | ((p2 as u64) << 40)
+        | ((p3 as u64) << 32)
+        | ((p4 as u64) << 24)
+        | ((p5 as u64) << 16)
+        | ((p6 as u64) << 8)
+        | (p7 as u64);
+    let passed = match pass_tag {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    let skipped = match skip_tag {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    if kind_tag > 2 || (passed && skipped) || (passed && exit_code != 0) {
+        return None;
+    };
+    Some((passed, skipped, kind_tag, exit_code, passed_tests))
+}
+
+fn spawn_claim_once(
     root: &Path,
-    c: &Claim,
-) -> std::io::Result<(std::process::Output, Option<std::process::Output>)> {
-    let run_once = || {
-        Command::new("sh")
-            .arg("-c")
-            .arg(&c.command)
-            .current_dir(root)
-            .output()
-    };
-    let bounded =
-        c.kind == "bench" && c.metric.is_some() && (c.min_value.is_some() || c.max_value.is_some());
-    let mut best = run_once()?;
-    let mut last = None;
-    if !bounded {
-        return Ok((best, last));
-    }
-    let name = c.metric.as_ref().expect("bounded implies a metric name");
-    // A claim carrying both bounds is satisfied only INSIDE the band, so once a sample is
-    // inside it there is nothing better to look for and the loop below stops.
-    let satisfies =
-        |v: f64| c.min_value.is_none_or(|min| v >= min) && c.max_value.is_none_or(|max| v <= max);
-    // How far a sample sits OUTSIDE what the claim demands: zero for any sample that
-    // satisfies it, and otherwise the distance to the bound it missed. "Better" is the
-    // smaller miss: the higher sample for a floor, the lower for a ceiling, and for a
-    // claim carrying BOTH bounds the one nearer the band — where plain "higher" would
-    // let a sample that overshot the ceiling displace an in-band one.
-    let miss = |v: f64| -> f64 {
-        let below = c.min_value.map_or(0.0, |min| min - v);
-        let above = c.max_value.map_or(0.0, |max| v - max);
-        below.max(above).max(0.0)
-    };
-    let better = |cand: f64, cur: f64| miss(cand) < miss(cur);
-    let mut best_val = extract_metric(&String::from_utf8_lossy(&best.stdout), name);
-    for _ in 1..BENCH_ATTEMPTS {
-        // A sample that already meets the bound is the answer; stop paying for more.
-        if best_val.is_some_and(satisfies) {
-            break;
-        }
-        let next = run_once()?;
-        let next_val = extract_metric(&String::from_utf8_lossy(&next.stdout), name);
-        // A missing metric is a failure the caller must SEE, so never let a later run
-        // that produced no metric displace one that did.
-        match (next_val, best_val) {
-            (Some(n), Some(b)) if better(n, b) => {
-                best = next;
-                best_val = Some(n);
-                last = None;
-            }
-            (Some(n), None) => {
-                best = next;
-                best_val = Some(n);
-                last = None;
-            }
-            _ => last = Some(next),
-        }
-    }
-    Ok((best, last))
+    command: &str,
+    timeout_secs: Option<u64>,
+) -> std::io::Result<BoundedCommandOutput> {
+    let limit_ms = effective_claim_timeout_ms(timeout_secs, None);
+    run_command_with_timeout(root, command, limit_ms)
 }
 
 /// Run a single claim's command with `root` as the working directory.
@@ -221,17 +257,19 @@ pub fn run_claim(root: &Path, c: &Claim) -> ClaimResult {
             };
         }
     }
-    match run_with_bench_retry(root, c) {
-        Ok((output, last)) => {
-            let stdout = String::from_utf8_lossy(&output.stdout);
+    match spawn_claim_once(root, &c.command, c.timeout_secs) {
+        Ok(output) => {
+            let stdout = utf8_lossy_clean(&output.stdout);
             let stdout_sha = sha256_hex(&output.stdout);
-            let status_ok = output.status.success();
+            let status_ok = !output.timed_out && output.status.success();
             let sha_ok = match &c.expected_output_sha {
                 Some(expected) => expected == &stdout_sha,
                 None => true,
             };
             let mut note = String::new();
-            if !status_ok {
+            if output.timed_out {
+                note.push_str(&format!("command timed out after {} ms; ", output.limit_ms));
+            } else if !status_ok {
                 note.push_str("command exited non-zero; ");
             }
             if !sha_ok {
@@ -281,13 +319,13 @@ pub fn run_claim(root: &Path, c: &Claim) -> ClaimResult {
                 }
             }
 
-            // A `kind = "test"` claim — and ANY `cargo test` command, whatever
+            // A `kind = "test"` claim — and ANY `targo <lane> test` command, whatever
             // kind it is labelled — must actually run at least one test: a
             // filter that matches nothing exits 0 but exercises nothing, and
             // relabelling the kind must not buy an exemption.
             let mut tests_ok = true;
-            let is_cargo_test = cargo_subcommand(&c.command) == Some("test");
-            if (c.kind == "test" || is_cargo_test) && status_ok && count_passed_tests(&stdout) == 0
+            let is_targo_test = targo_subcommand(&c.command) == Some("test");
+            if (c.kind == "test" || is_targo_test) && status_ok && count_passed_tests(&stdout) == 0
             {
                 tests_ok = false;
                 note.push_str(
@@ -305,10 +343,9 @@ pub fn run_claim(root: &Path, c: &Claim) -> ClaimResult {
             let (stdout_tail, stderr_tail) = if passed {
                 (String::new(), String::new())
             } else {
-                let shown = last.as_ref().unwrap_or(&output);
                 (
-                    tail_lines(&shown.stdout, FAILURE_TAIL_LINES),
-                    tail_lines(&shown.stderr, FAILURE_TAIL_LINES),
+                    tail_lines(&output.stdout, FAILURE_TAIL_LINES),
+                    tail_lines(&output.stderr, FAILURE_TAIL_LINES),
                 )
             };
             ClaimResult {
@@ -369,6 +406,7 @@ mod tests {
             min_value: min,
             max_value: None,
             platform: None,
+            timeout_secs: None,
         }
     }
 
@@ -433,23 +471,23 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
-    fn cargo_test_running_zero_tests_fails_whatever_the_kind() {
+    fn targo_test_running_zero_tests_fails_whatever_the_kind() {
         use std::os::unix::fs::PermissionsExt;
-        // Relabelling a `cargo test` claim as `selftest`/`build`/`bench` must
-        // not exempt it from the zero-tests check: the command is what it is.
-        // A fake `cargo` on a private PATH prints the libtest summary a vacuous
-        // filter produces, so no real build runs here.
-        let dir = std::env::temp_dir().join(format!("astream-fake-cargo-{}", std::process::id()));
+        // Relabelling a `targo <lane> test` claim as `selftest`/`build`/`bench`
+        // must not exempt it from the zero-tests check: the command is what it
+        // is. A fake `targo` on a private PATH prints the libtest summary a
+        // vacuous filter produces, so no real build runs here.
+        let dir = std::env::temp_dir().join(format!("astream-fake-targo-{}", std::process::id()));
         let _tmp = Cleanup(dir.clone());
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let fake = dir.join("cargo");
+        let fake = dir.join("targo");
         std::fs::write(
             &fake,
             "#!/bin/sh\nprintf 'test result: ok. 0 passed; 0 failed'\n",
         )
-        .expect("fake cargo");
+        .expect("fake targo");
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
-        let cmd = format!("PATH={} cargo test --lib zzz", dir.display());
+        let cmd = format!("PATH={} targo --unverified test --lib zzz", dir.display());
         for kind in ["selftest", "build", "bench"] {
             let mut c = claim(kind, &cmd, None, None);
             c.expected_output_sha = Some(sha256_hex(b"test result: ok. 0 passed; 0 failed"));
@@ -457,7 +495,7 @@ mod tests {
             let r = run_claim(std::path::Path::new("."), &c);
             assert!(
                 r.note.contains("ran zero tests"),
-                "kind {kind:?}: a cargo test that ran nothing must be noted: {}",
+                "kind {kind:?}: a targo test that ran nothing must be noted: {}",
                 r.note
             );
             assert!(!r.passed, "kind {kind:?}: must fail: {}", r.note);
@@ -545,5 +583,78 @@ mod tests {
         assert_eq!(extract_metric("METRIC ops -inf\n", "ops"), None);
         // A real finite value is still extracted.
         assert_eq!(extract_metric("METRIC ops 250000\n", "ops"), Some(250000.0));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn benchmark_claim_keeps_its_first_attempt_and_failure_evidence() {
+        let root = std::env::temp_dir().join(".ubd").join(format!(
+            "astream-evidence-single-attempt-{}-{}.noindex",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let _cleanup = Cleanup(root.clone());
+        for (metric, exit, min, max) in [
+            (0, 0, Some(10.0), None),
+            (0, 7, Some(10.0), None),
+            (15, 7, Some(10.0), None),
+            (25, 0, None, Some(20.0)),
+        ] {
+            let dir = root.join(format!("metric-{metric}-exit-{exit}"));
+            std::fs::create_dir(&dir).unwrap();
+            let command = format!(
+                "if test -e attempt; then printf 2 > attempt; \
+                 printf 'METRIC ops 15\\n'; printf later >&2; else \
+                 printf 1 > attempt; printf 'METRIC ops {metric}\\n'; \
+                 printf first >&2; exit {exit}; fi"
+            );
+            let mut c = claim("bench", &command, Some("ops"), min);
+            c.max_value = max;
+            let result = run_claim(&dir, &c);
+            assert_eq!(
+                std::fs::read_to_string(dir.join("attempt")).unwrap(),
+                "1",
+                "{result:?}"
+            );
+            assert!(!result.passed, "{result:?}");
+            assert_eq!(result.exit_code, Some(exit));
+            assert_eq!(result.metric_value, Some(f64::from(metric)));
+            let stdout = format!("METRIC ops {metric}\n");
+            assert_eq!(result.stdout_sha, sha256_hex(stdout.as_bytes()));
+            assert_eq!(result.stdout_tail, stdout.trim_end());
+            assert_eq!(result.stderr_tail, "first");
+        }
+        let mut control = claim(
+            "bench",
+            "printf 'METRIC ops 15\\n'",
+            Some("ops"),
+            Some(10.0),
+        );
+        control.max_value = Some(20.0);
+        let result = run_claim(&root, &control);
+        assert!(result.passed, "{result:?}");
+        assert_eq!(result.metric_value, Some(15.0));
+    }
+
+    #[test]
+    fn clean_origin_claim_timeout_kills_hung_claim_fail_closed() {
+        let mut c = claim(
+            "build",
+            "printf 'before-hang\\n'; exec sleep 10",
+            None,
+            None,
+        );
+        c.timeout_secs = Some(1);
+        let res = run_claim(&std::env::temp_dir(), &c);
+        assert!(!res.passed);
+        assert!(
+            res.note.contains("command timed out after 1000 ms;"),
+            "unexpected note: {}",
+            res.note
+        );
     }
 }

@@ -1,0 +1,11 @@
+[package]
+name = "astream-leases-2"
+description = "An independent model of boot-scoped incarnation leases, WAN RTT window autoscaling, and quorum fence protocols (shard 2 of 6, batches 75..76); no astream runtime crate and no aterm code calls it. `aterm harness agy` is `aterm-agent`'s `harness::agy_quota`, aterm's Autopilot is `aterm-agent`'s harness, and its `syspolicyd` and OSC 52 guards are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

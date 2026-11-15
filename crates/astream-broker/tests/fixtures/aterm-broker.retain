@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Andrew Yates
+#
+# THE RETENTION RULES EVERY BROKER aterm OPENS RETAINS ITS LOG BY: aterm-link's
+# `broker_rules::default_rules`, rule for rule and in its order, at its own bounds
+# (`EV_FILTER`, `PRESENCE_FILTER`, `MAIL_FILTER`, `MAIL_READER`, `MAX_AGE`, `EV_BYTES`,
+# `MAIL_BYTES`, `DEFAULT_BYTES`). A rules file as `asb serve --retain-file` reads one
+# (`parse_rules`, astream-broker `retention.rs`).
+#
+# astream's tests load this file wherever they run aterm's rules (`aterm_retention`, and
+# `retention_planner`'s simulation), at byte bounds scaled down so a test's records reach
+# them, and aterm-link's `astream_fixture_tests` holds it equal to aterm's own rules: a
+# change on either side fails aterm's test until this file and aterm's pin of astream move
+# together.
+
+# The bulk stream: the one prefix rule, which holds the cut.
+prefix age=7d bytes=256MiB /f/*/pub/*/*/ev
+# Every presence row, node and session: its last value only.
+hold last /f/*/pub/*/*/presence
+# Every mail lane: held below the cut until the inbox group of the node its subject names
+# reads it, for its age within its bytes.
+hold read=/f/{2}/cur/{4}/node/inbox age=7d bytes=64MiB /f/*/in/>
+# Every other subject.
+default age=7d bytes=32MiB

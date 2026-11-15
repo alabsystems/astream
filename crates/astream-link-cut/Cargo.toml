@@ -1,0 +1,12 @@
+[package]
+name = "astream-link-cut"
+description = "An independent model of a broker-native consistent `Cut` frontier across `ShardedBroker` bus records (`DESIGN-aterm-fabric.md` §10), pairwise causal dependency verifier, `bt_ms` skew envelope, held-gap cut guard, incarnation lease pin, and replay cursor; no astream runtime crate and no aterm code calls it. The bus-cut replay it models is cut in aterm (`06426ed3f` removed `replay.rs`), and astream's shipped cut lattice is `astream-wire`'s `cut`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

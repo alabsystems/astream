@@ -1,0 +1,12 @@
+[package]
+name = "astream-transcript-idx"
+description = "An independent model of a sparse `step_index` byte-offset `.jsonl` trajectory index, `truncated_fields` selective hydration from `transcript_full.jsonl`, media URI manifest tracking, `/compact` anchor retention, `conversation://` link extraction, and rolling CRC-32 seals; no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }

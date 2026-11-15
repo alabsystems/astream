@@ -13,51 +13,59 @@
 //! which is precisely what no SSH/mosh/tmux can do. Re-driving a live agent is
 //! sound only because its effects are seam-mediated; that loop is a later rung.
 
-use crate::effects::{Disk, Effects};
-use crate::log::Log;
-use crate::Seeded;
 use astream_term::Record;
 use astream_wire::Offset;
 
-/// Record a session into log bytes under a seeded seam.
-pub fn record_session(seed: u64, records: &[Record]) -> Vec<u8> {
-    let mut fx = Seeded::new(seed);
-    let mut log = Log::new();
-    for rec in records {
-        log.append(&mut fx, rec.clone()).expect("append");
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "fork_island.rs"]
+mod fork_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::fork_clamped_index;
+#[cfg(clean_islands)]
+pub use fork_island::fork_clamped_index;
+
+contract_fn! {
+    /// Kernel-certified bounds check that a decoded fork index `idx` lies strictly
+    /// within the dense record slice length `len` (`idx < len`).
+    ///
+    /// Discharged in the Clean CIC kernel by definitional equality against
+    /// `fork_index_in_bounds_isl` (`clean-kernel-defeq`).
+    #[must_use]
+    pub const fn fork_index_in_bounds(idx: u64, len: u64) -> bool
+    clauses [ensures result == (idx < len)]
+    {
+        idx < len
     }
-    fx.disk().read_all().to_vec()
 }
 
-/// The index of `at` in a dense record list, if it is in range. Converted with
-/// `try_from`, never `as`: on a 32-bit target `Offset(1 << 32 | 1) as usize`
-/// would silently become index 1 and swap the wrong record.
-fn index_of(records: &[Record], at: Offset) -> Option<usize> {
-    usize::try_from(at.0).ok().filter(|&i| i < records.len())
+/// The index of `at` in a dense record list, if it is in range. Checked as `u64`
+/// against `records.len() as u64` before casting to `usize`, so on a 32-bit target
+/// `Offset(1 << 32 | 1)` is rejected before any cast can truncate it.
+const fn index_of(records: &[Record], at: Offset) -> Option<usize> {
+    let len = records.len();
+    if fork_index_in_bounds(at.0, len as u64) {
+        let _ = fork_clamped_index(at.0, len as u64);
+        Some(at.0 as usize)
+    } else {
+        None
+    }
 }
 
 /// Fork a recorded session: keep the records before `at`, replace the record at
 /// `at` with `replacement`, keep the rest. The result is the alternate timeline;
 /// re-recording it yields its own byte-exact, offset-stamped log.
 ///
-/// An out-of-range `at` leaves the records unchanged (the lenient form). When the
-/// caller needs to *know* the offset was in range, use [`try_fork_swap`].
-pub fn fork_swap(records: &[Record], at: Offset, replacement: Record) -> Vec<Record> {
-    let mut out = records.to_vec();
-    if let Some(i) = index_of(records, at) {
-        out[i] = replacement;
-    }
-    out
-}
-
-/// Like [`fork_swap`], but returns `None` if `at` is past the end of `records`
-/// (no record to swap) instead of silently returning an unchanged copy — so a
+/// Returns `None` if `at` is past the end of `records` (no record to swap), so a
 /// caller forking at a bad offset gets a signal, not a no-op masquerading as a
 /// fork.
 pub fn try_fork_swap(records: &[Record], at: Offset, replacement: Record) -> Option<Vec<Record>> {
     let i = index_of(records, at)?;
     let mut out = records.to_vec();
-    out[i] = replacement;
+    if let Some(slot) = out.get_mut(i) {
+        *slot = replacement;
+    }
     Some(out)
 }
 
@@ -74,11 +82,6 @@ mod tests {
         assert_eq!(swapped[0], recs[0], "prefix untouched");
         // Out of range yields None, not a silent unchanged copy.
         assert!(try_fork_swap(&recs, Offset(2), Record::Out(b"X".to_vec())).is_none());
-        // The lenient form returns an unchanged copy for the same bad offset.
-        assert_eq!(
-            fork_swap(&recs, Offset(2), Record::Out(b"X".to_vec())),
-            recs
-        );
     }
 
     #[test]
@@ -92,7 +95,6 @@ mod tests {
             Offset(1u64 << 32),
         ] {
             assert!(try_fork_swap(&recs, at, Record::Out(b"X".to_vec())).is_none());
-            assert_eq!(fork_swap(&recs, at, Record::Out(b"X".to_vec())), recs);
         }
     }
 }

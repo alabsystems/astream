@@ -3,35 +3,40 @@
 version = 4
 
 [[package]]
-name = "aead"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d122413f284cf2d62fb1b7db97e02edb8cda96d769b16e443a4f6195e35662b0"
-dependencies = [
- "crypto-common",
- "generic-array",
-]
-
-[[package]]
 name = "anyhow"
 version = "1.0.102"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f202df86484c868dbad7eaa557ef785d5c66295e41b460ef922eca0723b842c"
 
 [[package]]
-name = "astream-aead"
-version = "0.1.0"
+name = "astream-abrew-bottle"
+version = "0.2.0"
 dependencies = [
- "chacha20poly1305",
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-abrew-pkg"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-aead"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
  "ed25519-dalek",
  "getrandom 0.2.17",
- "sha2",
+ "ring",
  "x25519-dalek",
+ "zeroize",
 ]
 
 [[package]]
 name = "astream-agent"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "astream-effects",
  "astream-term",
@@ -39,48 +44,273 @@ dependencies = [
 ]
 
 [[package]]
+name = "astream-agy-quota"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-atpkg-toolchain"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-audit-seal"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-autopilot-ctl"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
 name = "astream-broker"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "astream-aead",
  "astream-agent",
  "astream-cap",
+ "astream-digest",
+ "astream-sys",
  "astream-wire",
 ]
 
 [[package]]
 name = "astream-cap"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "astream-digest",
+ "astream-sys",
  "astream-wire",
- "sha2",
 ]
 
 [[package]]
+name = "astream-cap-ext"
+version = "0.2.0"
+dependencies = [
+ "astream-aead",
+ "astream-cap",
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-cert-auth"
+version = "0.2.0"
+dependencies = [
+ "astream-cap",
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-coalesce-1"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-coalesce-2"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-coalesce-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-coalesce-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-coalesce-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-coalesce-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cognition-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cognition-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cognition-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cognition-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cognition-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cognition-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-cross-cells"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-digest"
+version = "0.2.0"
+
+[[package]]
 name = "astream-effects"
-version = "0.1.0"
+version = "0.2.0"
 
 [[package]]
 name = "astream-engine"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
+ "astream-digest",
  "astream-term",
  "astream-wire",
  "proptest",
 ]
 
 [[package]]
+name = "astream-env-scrub"
+version = "0.2.0"
+
+[[package]]
 name = "astream-evidence"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
- "serde",
- "sha2",
+ "astream-digest",
+ "syn",
  "toml",
 ]
 
 [[package]]
+name = "astream-ext-authority"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-fabric"
+version = "0.2.0"
+dependencies = [
+ "astream-broker",
+ "astream-sys",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-fabric-mail"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-fabric-ops"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-failover-ops"
+version = "0.2.0"
+dependencies = [
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-flow-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-flow-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-flow-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-flow-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-flow-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-flow-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-git-align"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-grapheme-layout"
+version = "0.2.0"
+
+[[package]]
+name = "astream-guards-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-guards-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-guards-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-guards-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-guards-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-guards-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-held-compactor"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
 name = "astream-host"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "astream-effects",
  "astream-engine",
@@ -90,12 +320,84 @@ dependencies = [
 ]
 
 [[package]]
+name = "astream-integrity-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-integrity-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-integrity-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-integrity-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-integrity-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-integrity-6"
+version = "0.2.0"
+
+[[package]]
 name = "astream-kafka"
-version = "0.1.0"
+version = "0.2.0"
+dependencies = [
+ "astream-aead",
+ "astream-broker",
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-keybind-chord"
+version = "0.2.0"
+
+[[package]]
+name = "astream-lease-failover"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-leases-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-leases-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-leases-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-leases-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-leases-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-leases-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-link-cut"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
 
 [[package]]
 name = "astream-live"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "astream-agent",
  "astream-effects",
@@ -103,26 +405,350 @@ dependencies = [
 ]
 
 [[package]]
-name = "astream-pump"
-version = "0.1.0"
+name = "astream-macos-tcc"
+version = "0.2.0"
 dependencies = [
- "astream-broker",
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-mcp-bridge"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-mesh-discovery"
+version = "0.2.0"
+dependencies = [
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-metal-damage"
+version = "0.2.0"
+
+[[package]]
+name = "astream-ordered-barrier"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-osc-protocol"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-presence-ext"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-protocol-1"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-protocol-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-protocol-3"
+version = "0.2.0"
+dependencies = [
+ "astream-cap",
+]
+
+[[package]]
+name = "astream-protocol-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-protocol-5"
+version = "0.2.0"
+dependencies = [
  "astream-term",
 ]
 
 [[package]]
+name = "astream-protocol-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-pty-mux"
+version = "0.2.0"
+
+[[package]]
+name = "astream-pty-signal"
+version = "0.2.0"
+
+[[package]]
+name = "astream-pump"
+version = "0.2.0"
+dependencies = [
+ "astream-broker",
+ "astream-engine",
+ "astream-host",
+ "astream-sys",
+ "astream-term",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-quota-sched"
+version = "0.2.0"
+dependencies = [
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-restore-ops"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-resync-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-resync-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-resync-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-resync-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-resync-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-resync-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-retire-history"
+version = "0.2.0"
+dependencies = [
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-routing-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-routing-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-routing-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-routing-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-routing-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-routing-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-scrollback-tier"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-seccomp-replay"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-secret-vault"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-security-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-security-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-security-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-security-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-security-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-security-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-self-restart"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-session-ops"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+ "astream-effects",
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-sim-fabric"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-smt-governor"
+version = "0.2.0"
+
+[[package]]
+name = "astream-speculative-echo"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-storage-1"
+version = "0.2.0"
+
+[[package]]
+name = "astream-storage-2"
+version = "0.2.0"
+
+[[package]]
+name = "astream-storage-3"
+version = "0.2.0"
+
+[[package]]
+name = "astream-storage-4"
+version = "0.2.0"
+
+[[package]]
+name = "astream-storage-5"
+version = "0.2.0"
+
+[[package]]
+name = "astream-storage-6"
+version = "0.2.0"
+
+[[package]]
+name = "astream-subagent-dag"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-subject-retire"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-sys"
+version = "0.2.0"
+
+[[package]]
+name = "astream-sys-telemetry"
+version = "0.2.0"
+
+[[package]]
 name = "astream-term"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
 ]
 
 [[package]]
+name = "astream-transcript-idx"
+version = "0.2.0"
+dependencies = [
+ "astream-wire",
+]
+
+[[package]]
+name = "astream-tunnel-relay"
+version = "0.2.0"
+dependencies = [
+ "astream-digest",
+]
+
+[[package]]
+name = "astream-uds-owner"
+version = "0.2.0"
+
+[[package]]
+name = "astream-vt-ext"
+version = "0.2.0"
+dependencies = [
+ "astream-term",
+]
+
+[[package]]
+name = "astream-wan-delta"
+version = "0.2.0"
+dependencies = [
+ "astream-wire",
+]
+
+[[package]]
 name = "astream-wire"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "proptest",
 ]
+
+[[package]]
+name = "astream-worktree-sync"
+version = "0.2.0"
 
 [[package]]
 name = "autocfg"
@@ -167,45 +793,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc"
+version = "1.2.63"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "556e016178bb5662a08681bbe0f00f8e17631781a4dfc8c45e466e4b185ec27f"
+dependencies = [
+ "find-msvc-tools",
+ "shlex",
+]
+
+[[package]]
 name = "cfg-if"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
-
-[[package]]
-name = "chacha20"
-version = "0.9.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3613f74bd2eac03dad61bd53dbe620703d4371614fe0bc3b9f04dd36fe4e818"
-dependencies = [
- "cfg-if",
- "cipher",
- "cpufeatures",
-]
-
-[[package]]
-name = "chacha20poly1305"
-version = "0.10.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "10cd79432192d1c0f4e1a0fef9527696cc039165d729fb41b3f4f4f354c2dc35"
-dependencies = [
- "aead",
- "chacha20",
- "cipher",
- "poly1305",
- "zeroize",
-]
-
-[[package]]
-name = "cipher"
-version = "0.4.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "773f3b9af64447d2ce9850330c473515014aa235e6a783b02db81ff39e4a3dad"
-dependencies = [
- "crypto-common",
- "inout",
- "zeroize",
-]
 
 [[package]]
 name = "const-oid"
@@ -316,7 +917,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -330,6 +931,12 @@ name = "fiat-crypto"
 version = "0.2.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28dea519a9695b9977216879a3ebfddf92f1c08c05d984f8996aecd6ecdc811d"
+
+[[package]]
+name = "find-msvc-tools"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5baebc0774151f905a1a2cc41989300b1e6fbb29aff0ceffa1064fdd3088d582"
 
 [[package]]
 name = "fnv"
@@ -429,15 +1036,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "inout"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "879f10e63c20629ecabbb64a8010319738c66a5cd0c29b02d63d272b03751d01"
-dependencies = [
- "generic-array",
-]
-
-[[package]]
 name = "itoa"
 version = "1.0.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -489,12 +1087,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "opaque-debug"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c08d65885ee38876c4f86fa503fb49d7b507c2b62552df7c70b2fce627e06381"
-
-[[package]]
 name = "pkcs8"
 version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -502,17 +1094,6 @@ checksum = "f950b2377845cebe5cf8b5165cb3cc1a5e0fa5cfa3e1f7f55707d8fd82e0a7b7"
 dependencies = [
  "der",
  "spki",
-]
-
-[[package]]
-name = "poly1305"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8159bd90725d2df49889a078b54f4f79e87f1f8a8444194cdca81d38f5393abf"
-dependencies = [
- "cpufeatures",
- "opaque-debug",
- "universal-hash",
 ]
 
 [[package]]
@@ -643,6 +1224,20 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
+name = "ring"
+version = "0.17.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a4689e6c2294d81e88dc6261c768b63bc4fcdb852be6d1352498b114f61383b7"
+dependencies = [
+ "cc",
+ "cfg-if",
+ "getrandom 0.2.17",
+ "libc",
+ "untrusted",
+ "windows-sys 0.52.0",
+]
+
+[[package]]
 name = "rustc_version"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -661,7 +1256,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -746,6 +1341,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shlex"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
 name = "signature"
 version = "2.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -791,7 +1392,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -860,14 +1461,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
 
 [[package]]
-name = "universal-hash"
-version = "0.5.1"
+name = "untrusted"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc1de2c688dc15305988b563c3854064043356019f97a4b46276fe734c4f07ea"
-dependencies = [
- "crypto-common",
- "subtle",
-]
+checksum = "8ecb6da28b8a351d773b68d5825ac39017e680750f980f3a1a85cd8dd28a47c1"
 
 [[package]]
 name = "version_check"
@@ -950,12 +1547,85 @@ checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
 
 [[package]]
 name = "windows-sys"
+version = "0.52.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "282be5f36a8ce781fad8c8ae18fa3f9beff57ec1b52cb3de0789201425d9a33d"
+dependencies = [
+ "windows-targets",
+]
+
+[[package]]
+name = "windows-sys"
 version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ae137229bcbd6cdf0f7b80a31df61766145077ddf49416a728b02cb3921ff3fc"
 dependencies = [
  "windows-link",
 ]
+
+[[package]]
+name = "windows-targets"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b724f72796e036ab90c1021d4780d4d3d648aca59e491e6b98e725b84e99973"
+dependencies = [
+ "windows_aarch64_gnullvm",
+ "windows_aarch64_msvc",
+ "windows_i686_gnu",
+ "windows_i686_gnullvm",
+ "windows_i686_msvc",
+ "windows_x86_64_gnu",
+ "windows_x86_64_gnullvm",
+ "windows_x86_64_msvc",
+]
+
+[[package]]
+name = "windows_aarch64_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a4622180e7a0ec044bb555404c800bc9fd9ec262ec147edd5989ccd0c02cd3"
+
+[[package]]
+name = "windows_aarch64_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09ec2a7bb152e2252b53fa7803150007879548bc709c039df7627cabbd05d469"
+
+[[package]]
+name = "windows_i686_gnu"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e9b5ad5ab802e97eb8e295ac6720e509ee4c243f69d781394014ebfe8bbfa0b"
+
+[[package]]
+name = "windows_i686_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0eee52d38c090b3caa76c563b86c3a4bd71ef1a819287c19d586d7334ae8ed66"
+
+[[package]]
+name = "windows_i686_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "240948bc05c5e7c6dabba28bf89d89ffce3e303022809e73deaefe4f6ec56c66"
+
+[[package]]
+name = "windows_x86_64_gnu"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "147a5c80aabfbf0c7d901cb5895d1de30ef2907eb21fbbab29ca94c5b08b1a78"
+
+[[package]]
+name = "windows_x86_64_gnullvm"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "24d5b23dc417412679681396f2b49f3de8c1473deb516bd34410872eff51ed0d"
+
+[[package]]
+name = "windows_x86_64_msvc"
+version = "0.52.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "589f6da84c646204747d1270a2a5661ea66ed1cced2631d546fdfb155959f9ec"
 
 [[package]]
 name = "winnow"

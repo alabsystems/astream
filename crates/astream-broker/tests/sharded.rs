@@ -5,7 +5,8 @@
 //! after a restart. Ordering is per-partition (NOT a global total order) — the honest
 //! Kafka-style trade-off for scale. Also pinned: the shard count is persisted and a
 //! mismatching reopen/connect is refused; a shard's error reaches the fan-in consumer
-//! instead of vanishing; and dropping a fan-in releases its sockets and threads.
+//! instead of vanishing; so does a shard's gap notice, what retention gave up below its
+//! tail (R4's addendum, A9); and dropping a fan-in releases its sockets and threads.
 //! No sleeps (one bounded wait on the broker's own liveness reaper).
 
 #![cfg(unix)] // serves the broker on a Unix-domain socket; std has no UDS on Windows
@@ -234,6 +235,16 @@ fn dir_with_a_failing_shard(dir: &Path) -> (Broker, astream_broker::BrokerHandle
     let l = UnixListener::bind(dir.join("shard-1.sock")).unwrap();
     std::thread::spawn(move || {
         if let Ok((mut s, _)) = l.accept() {
+            // The modern client opts in before its one-way stream. This failing
+            // shard is an older broker for that request, then refuses Subscribe.
+            let _ = read_frame(&mut s);
+            let _ = write_frame(
+                &mut s,
+                &encode_response(&Response::Error {
+                    code: astream_broker::proto::ERR_REFUSED,
+                    msg: "malformed request".into(),
+                }),
+            );
             // Read the Subscribe first: closing on an unread request would make the
             // client's write race the close and fail with EPIPE instead of reading
             // the Error below.
@@ -348,4 +359,125 @@ fn dropping_a_fan_in_releases_its_sockets_and_threads() {
         "fd table did not return to baseline: {baseline} before, {now} after {ROUNDS} \
          subscribe+drop rounds of {SHARDS} shards (a leaked socket per shard per round)"
     );
+}
+
+/// The records retention keeps on the gap test's shard: the bulk stream its newest two
+/// records by their bytes, and mail for a week within three mails' bytes, past which the
+/// oldest is given up unread.
+#[cfg(feature = "retention")]
+fn gap_rules() -> astream_broker::Retention {
+    use astream_broker::{record_bytes, BrokerRecord, Retention, Rule};
+    let bytes = |subject: &str| {
+        record_bytes(&BrokerRecord {
+            seq: astream_wire::Offset(0),
+            producer_id: 1,
+            producer_seq: 1,
+            subject: subject.to_string(),
+            body: b"body".to_vec(),
+            commit: None,
+        })
+    };
+    Retention::new(
+        vec![
+            Rule::prefix("/f/F/pub/*/*/ev")
+                .unwrap()
+                .max_bytes(2 * bytes("/f/F/pub/n1/s1/ev")),
+            Rule::hold("/f/F/in/>")
+                .unwrap()
+                .max_bytes(3 * bytes("/f/F/in/n1/from/a"))
+                .max_age(Duration::from_secs(7 * 86_400)),
+        ],
+        Rule::default_hold(),
+    )
+    .unwrap()
+}
+
+/// What `read` makes of `sub` within a minute (a hang detector, never a budget), with `sub`
+/// handed back.
+#[cfg(feature = "retention")]
+fn within_a_minute<T: Send + 'static>(
+    sub: ShardedSubscription,
+    read: impl FnOnce(&ShardedSubscription) -> T + Send + 'static,
+) -> (ShardedSubscription, T) {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let got = read(&sub);
+        let _ = tx.send((sub, got));
+    });
+    rx.recv_timeout(Duration::from_secs(60))
+        .expect("the fan-in did not answer within a minute")
+}
+
+/// A SHARD'S GAP NOTICE REACHES THE FAN-IN (R4's addendum, A9). Shard 1's log gave up its two
+/// oldest of five mails past the mail class's bytes, then was reopened, so its tail from 0
+/// is owed the range `0..2` with no count. A fan-in that reads deliveries alone is still
+/// handed the notice, tagged with its shard, by `take_gaps`, once; one that reads events
+/// is told it before the three held mails it is then delivered. NC: forwarders that read
+/// deliveries alone (`Subscription::recv`) hand back no notice.
+#[cfg(feature = "retention")]
+#[test]
+fn a_shards_gap_notice_reaches_the_fan_in_before_its_records() {
+    use astream_broker::{BrokerLog, Gap, ShardedEvent};
+    let _serial = serial();
+    let (_tmp, dir) = fresh_dir("gap");
+    let logs = dir.join("logs");
+    let socks = dir.join("socks");
+    drop(ShardedBroker::open(&logs, 2).unwrap());
+    {
+        let mut log = BrokerLog::open(logs.join("shard-1.log")).unwrap();
+        log.set_retention(gap_rules()).unwrap();
+        let subjects = ["/f/F/in/n1/from/a"; 5]
+            .into_iter()
+            .chain(["/f/F/pub/n1/s1/ev"; 3]);
+        for (seq, subject) in subjects.enumerate() {
+            log.publish(1, seq as u64 + 1, subject.into(), b"body".to_vec())
+                .unwrap();
+        }
+        let tick = log.retain_by_rules(1_800_000_000_000).unwrap();
+        assert_eq!((tick.base, tick.carried), (6, 3));
+    }
+    let b = ShardedBroker::open(&logs, 2).unwrap();
+    let _h = b.serve(&socks).unwrap();
+    let told = Gap {
+        from: 0,
+        to: 2,
+        records: None,
+    };
+    let mail = |offset: u64| {
+        (
+            1usize,
+            offset,
+            "/f/F/in/n1/from/a".to_string(),
+            b"body".to_vec(),
+        )
+    };
+
+    let sub = ShardedSubscription::subscribe_all(&socks, 2, 0, "/f/F/in/>").unwrap();
+    let (sub, got) = within_a_minute(sub, |sub| {
+        (0..3).map(|_| sub.recv().unwrap()).collect::<Vec<_>>()
+    });
+    assert_eq!(got, vec![Some(mail(2)), Some(mail(3)), Some(mail(4))]);
+    assert_eq!(sub.take_gaps(), vec![(1, told)], "the notice a read passed");
+    assert_eq!(sub.take_gaps(), vec![], "handed back once");
+    drop(sub);
+
+    let sub = ShardedSubscription::subscribe_all(&socks, 2, 0, "/f/F/in/>").unwrap();
+    let (sub, got) = within_a_minute(sub, |sub| {
+        (0..4)
+            .map(|_| sub.recv_event().unwrap())
+            .collect::<Vec<_>>()
+    });
+    assert_eq!(
+        got,
+        vec![
+            Some(ShardedEvent::Gap {
+                shard: 1,
+                gap: told
+            }),
+            Some(ShardedEvent::Delivery(mail(2))),
+            Some(ShardedEvent::Delivery(mail(3))),
+            Some(ShardedEvent::Delivery(mail(4))),
+        ]
+    );
+    assert_eq!(sub.take_gaps(), vec![(1, told)]);
 }

@@ -1,0 +1,13 @@
+[package]
+name = "astream-mcp-bridge"
+description = "An independent model of MCP JSON-RPC 2.0 `Content-Length` framing, request-id correlation, least-privilege tool allowlists, `file://` URI sandboxing, untrusted output tagging, and deterministic shadow replay; no astream runtime crate and no aterm code calls it. MCP is cut: aterm has no MCP server and is driven through `aterm ctl`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-digest = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "astream-audit-seal"
+description = "An independent model of forward-secure HMAC/HKDF key-epoch ratcheting, domain-separated SHA-256 hash-chain links, M-of-N witness checkpoint cosigning, commitment-preserving payload redaction tombstones, WORM compliance holds, and logarithmic tamper bisection; no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

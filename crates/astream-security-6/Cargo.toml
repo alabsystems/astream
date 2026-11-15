@@ -1,0 +1,11 @@
+[package]
+name = "astream-security-6"
+description = "An independent model of cryptographic transcript binding, capability attenuation ceilings, and sidecar seals (shard 6 of 6, batches 131..132); no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

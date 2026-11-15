@@ -1,0 +1,89 @@
+// SPDX-License-Identifier: Apache-2.0
+// Copyright 2026 Andrew Yates
+
+//! `astream-sys` `owner_private` ACL-before-mode evaluator, `O_NONBLOCK` FIFO hang guard, `Links::Refuse` symlink blocker, `geteuid` owner check, strict `0600`/`0700` permission mask, and Darwin `ENOTSUP` `dir_flush_unavailable` classifier. forbid(unsafe_code).
+
+#![forbid(unsafe_code)]
+
+#[macro_use]
+#[path = "../../astream-wire/contract_fn.rs"]
+mod contract_fn;
+
+pub mod acl_before_mode_order;
+pub mod enotsup_dir_flush_class;
+pub mod nofollow_symlink_policy;
+pub mod nonblocking_fifo_guard;
+pub mod owner_euid_match;
+pub mod strict_0600_0700_mask;
+
+/// Four-byte magic prefix (`"AUDS"`) for a 16-byte `astream-uds-owner` wire snapshot header.
+pub const UDS_OWNER_WIRE_MAGIC: [u8; 4] = *b"AUDS";
+
+/// Wire format version for `astream-uds-owner` snapshot headers.
+pub const UDS_OWNER_WIRE_VERSION: u8 = 1;
+
+/// Encode a 16-byte `astream-uds-owner` wire snapshot header:
+/// `[0..4] = b"AUDS"`, `[4] = version (1)`, `[5] = perm_tag` (`0..=3`), `[6..8] = 0`,
+/// `[8..12] = owner_uid (BE)`, `[12..16] = mode_octal (BE)`.
+#[must_use]
+pub const fn encode_uds_owner_wire(
+    perm_tag: u8,
+    owner_uid: u32,
+    mode_octal: u32,
+) -> Option<[u8; 16]> {
+    if perm_tag > 3 || owner_uid == 0 {
+        return None;
+    }
+    Some([
+        UDS_OWNER_WIRE_MAGIC[0],
+        UDS_OWNER_WIRE_MAGIC[1],
+        UDS_OWNER_WIRE_MAGIC[2],
+        UDS_OWNER_WIRE_MAGIC[3],
+        UDS_OWNER_WIRE_VERSION,
+        perm_tag,
+        0,
+        0,
+        ((owner_uid >> 24) & 0xFF) as u8,
+        ((owner_uid >> 16) & 0xFF) as u8,
+        ((owner_uid >> 8) & 0xFF) as u8,
+        (owner_uid & 0xFF) as u8,
+        ((mode_octal >> 24) & 0xFF) as u8,
+        ((mode_octal >> 16) & 0xFF) as u8,
+        ((mode_octal >> 8) & 0xFF) as u8,
+        (mode_octal & 0xFF) as u8,
+    ])
+}
+
+/// Decode a 16-byte `astream-uds-owner` wire snapshot header into `(perm_tag, owner_uid, mode_octal)`.
+#[must_use]
+pub const fn decode_uds_owner_wire(buf: &[u8]) -> Option<(u8, u32, u32)> {
+    let [b'A', b'U', b'D', b'S', UDS_OWNER_WIRE_VERSION, perm_tag, 0, 0, a0, a1, a2, a3, b0, b1, b2, b3, ..] =
+        *buf
+    else {
+        return None;
+    };
+    let owner_uid = ((a0 as u32) << 24) | ((a1 as u32) << 16) | ((a2 as u32) << 8) | (a3 as u32);
+    let mode_octal = ((b0 as u32) << 24) | ((b1 as u32) << 16) | ((b2 as u32) << 8) | (b3 as u32);
+    if perm_tag > 3 || owner_uid == 0 {
+        return None;
+    }
+    Some((perm_tag, owner_uid, mode_octal))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn uds_owner_wire_roundtrips_and_rejects_malformed() {
+        let Some(frame) = encode_uds_owner_wire(1, 501, 384) else {
+            panic!("valid astream-uds-owner wire header should encode");
+        };
+        assert_eq!(decode_uds_owner_wire(&frame), Some((1, 501, 384)));
+        assert_eq!(encode_uds_owner_wire(1, 0, 384), None);
+        assert_eq!(encode_uds_owner_wire(4, 501, 384), None);
+        let mut bad = frame;
+        bad[4] = 9;
+        assert_eq!(decode_uds_owner_wire(&bad), None);
+    }
+}

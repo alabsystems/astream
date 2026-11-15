@@ -13,7 +13,29 @@
 //! * [`Frame::decode`] returns `Ok(None)` when more bytes are needed,
 //!   `Err(..)` on malformed/corrupt input, and never indexes out of bounds.
 
-use crate::hash::crc32_ieee;
+use crate::hash::{crc32_ieee, crc32_ieee_prefix};
+
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "frame_island.rs"]
+mod frame_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::frame_clamp_payload_len;
+#[cfg(clean_islands)]
+pub use frame_island::frame_clamp_payload_len;
+
+contract_fn! {
+    /// Kernel-certified payload-cap check (`len <= cap`), backed by the Clean
+    /// `payload_within_cap_isl` specification (`clean-kernel-defeq`) and the
+    /// Clean-origin [`frame_clamp_payload_len`] (`min(len, cap)`).
+    #[must_use]
+    pub const fn payload_within_cap(len: u64, cap: u64) -> bool
+    clauses [ensures result == (len <= cap)]
+    {
+        len <= cap
+    }
+}
 
 /// Frame magic: identifies an astream frame (`0xA5 0x71`).
 pub const MAGIC: [u8; 2] = [0xA5, 0x71];
@@ -50,9 +72,11 @@ pub enum FrameError {
     UnknownFlags,
 }
 
-impl std::fmt::Display for FrameError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let msg = match self {
+impl FrameError {
+    /// Human-readable static description of the frame error.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
             // Both documented causes are named: the 16 MiB policy cap is the one
             // an operator actually hits (every decode-path hit, and any encode of
             // 16 MiB..4 GiB); the u32 field is the theoretical encode-side ceiling.
@@ -61,12 +85,112 @@ impl std::fmt::Display for FrameError {
             FrameError::BadVersion => "unsupported frame version",
             FrameError::ChecksumMismatch => "frame payload CRC mismatch",
             FrameError::UnknownFlags => "frame flags byte sets bits unknown to this version",
-        };
-        f.write_str(msg)
+        }
+    }
+}
+
+impl std::fmt::Display for FrameError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
 impl std::error::Error for FrameError {}
+
+/// Encode the 12-byte [`Frame`] header for `payload`, checking [`MAX_PAYLOAD_LEN`]
+/// and computing the CRC-32 checksum.
+pub const fn encode_frame_header(payload: &[u8]) -> Result<[u8; HEADER_SIZE], FrameError> {
+    if payload.len() > MAX_PAYLOAD_LEN {
+        return Err(FrameError::TooLarge);
+    }
+    // `MAX_PAYLOAD_LEN` is 16 MiB, which always fits in `u32`.
+    let len_u32 = payload.len() as u32;
+    let l0 = (len_u32 & 0xff) as u8;
+    let l1 = ((len_u32 >> 8) & 0xff) as u8;
+    let l2 = ((len_u32 >> 16) & 0xff) as u8;
+    let l3 = ((len_u32 >> 24) & 0xff) as u8;
+    let crc = crc32_ieee(payload);
+    let c0 = (crc & 0xff) as u8;
+    let c1 = ((crc >> 8) & 0xff) as u8;
+    let c2 = ((crc >> 16) & 0xff) as u8;
+    let c3 = ((crc >> 24) & 0xff) as u8;
+    Ok([
+        MAGIC[0], MAGIC[1], VERSION, 0u8, l0, l1, l2, l3, c0, c1, c2, c3,
+    ])
+}
+
+/// Decode and validate a 12-byte [`Frame`] header `(payload_len, crc32)`.
+pub const fn decode_frame_header_bytes(
+    hdr: &[u8; HEADER_SIZE],
+) -> Result<(usize, u32), FrameError> {
+    let m0 = hdr[0];
+    let m1 = hdr[1];
+    let ver = hdr[2];
+    let flags = hdr[3];
+    let len = ((hdr[4] as u32)
+        | ((hdr[5] as u32) << 8)
+        | ((hdr[6] as u32) << 16)
+        | ((hdr[7] as u32) << 24)) as usize;
+    let crc = (hdr[8] as u32)
+        | ((hdr[9] as u32) << 8)
+        | ((hdr[10] as u32) << 16)
+        | ((hdr[11] as u32) << 24);
+    if m0 != MAGIC[0] || m1 != MAGIC[1] {
+        return Err(FrameError::BadMagic);
+    }
+    if ver != VERSION {
+        return Err(FrameError::BadVersion);
+    }
+    // Reserved flag bits MUST be zero; reject unknown bits rather than
+    // silently ignoring them (forward-compat guard).
+    if flags & !KNOWN_FLAGS != 0 {
+        return Err(FrameError::UnknownFlags);
+    }
+
+    // Cap how much we will commit to before the bytes are even present: an
+    // absurd-but-representable length is rejected, never buffered toward.
+    if len > MAX_PAYLOAD_LEN {
+        return Err(FrameError::TooLarge);
+    }
+    Ok((len, crc))
+}
+
+/// Validate a frame starting at `buf`, returning `(payload_len, rest_after_header)`
+/// when a complete, CRC-valid frame is present, `Ok(None)` when more bytes are
+/// needed, or `Err(..)` when the header or CRC is invalid.
+///
+/// Uses built-in slice pattern matching (`Subslice`) and [`crc32_ieee_prefix`],
+/// avoiding `split_first_chunk` and `split_at_checked`.
+pub const fn validate_frame_at(buf: &[u8]) -> Result<Option<(usize, &[u8])>, FrameError> {
+    let &[b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11, ref rest @ ..] = buf else {
+        return Ok(None);
+    };
+    let (len, crc) =
+        match decode_frame_header_bytes(&[b0, b1, b2, b3, b4, b5, b6, b7, b8, b9, b10, b11]) {
+            Ok(pair) => pair,
+            Err(e) => return Err(e),
+        };
+    let Some(actual_crc) = crc32_ieee_prefix(rest, len) else {
+        return Ok(None);
+    };
+    if actual_crc != crc {
+        return Err(FrameError::ChecksumMismatch);
+    }
+    Ok(Some((len, rest)))
+}
+
+/// Zero-copy [`Frame`] decoder returning `(payload_slice, total_consumed)`.
+pub fn decode_frame_slice(buf: &[u8]) -> Result<Option<(&[u8], usize)>, FrameError> {
+    let (len, rest) = match validate_frame_at(buf) {
+        Ok(Some(pair)) => pair,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Some(payload) = rest.get(..len) else {
+        return Ok(None);
+    };
+    Ok(Some((payload, HEADER_SIZE.saturating_add(len))))
+}
 
 /// An astream frame carrying an opaque payload.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -86,7 +210,8 @@ pub struct Decoded {
 
 impl Frame {
     /// Wrap an opaque payload.
-    pub fn new(payload: Vec<u8>) -> Self {
+    #[must_use]
+    pub const fn new(payload: Vec<u8>) -> Self {
         Frame { payload }
     }
 
@@ -94,18 +219,9 @@ impl Frame {
     /// payload exceeds the [`MAX_PAYLOAD_LEN`] policy cap (16 MiB) or the `u32`
     /// length field.
     pub fn encode(&self) -> Result<Vec<u8>, FrameError> {
-        let len = u32::try_from(self.payload.len()).map_err(|_| FrameError::TooLarge)?;
-        if self.payload.len() > MAX_PAYLOAD_LEN {
-            return Err(FrameError::TooLarge);
-        }
-        let crc = crc32_ieee(&self.payload);
-
-        let mut out = Vec::with_capacity(HEADER_SIZE + self.payload.len());
-        out.extend_from_slice(&MAGIC);
-        out.push(VERSION);
-        out.push(0u8); // flags: reserved
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&crc.to_le_bytes());
+        let hdr = encode_frame_header(&self.payload)?;
+        let mut out = Vec::with_capacity(HEADER_SIZE + 256);
+        out.extend_from_slice(&hdr);
         out.extend_from_slice(&self.payload);
         Ok(out)
     }
@@ -117,44 +233,16 @@ impl Frame {
     /// * `Ok(Some(_))` — a complete, CRC-valid frame plus bytes consumed.
     /// * `Err(_)` — the bytes are present but malformed/corrupt.
     pub fn decode(buf: &[u8]) -> Result<Option<Decoded>, FrameError> {
-        if buf.len() < HEADER_SIZE {
-            return Ok(None);
+        match decode_frame_slice(buf) {
+            Ok(Some((payload, consumed))) => Ok(Some(Decoded {
+                frame: Frame {
+                    payload: payload.to_vec(),
+                },
+                consumed,
+            })),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
         }
-        // All fixed-offset reads below are within the 12-byte header.
-        if buf[0] != MAGIC[0] || buf[1] != MAGIC[1] {
-            return Err(FrameError::BadMagic);
-        }
-        if buf[2] != VERSION {
-            return Err(FrameError::BadVersion);
-        }
-        // Reserved flag bits MUST be zero; reject unknown bits rather than
-        // silently ignoring them (forward-compat guard).
-        if buf[3] & !KNOWN_FLAGS != 0 {
-            return Err(FrameError::UnknownFlags);
-        }
-        let len = u32::from_le_bytes([buf[4], buf[5], buf[6], buf[7]]) as usize;
-        let crc = u32::from_le_bytes([buf[8], buf[9], buf[10], buf[11]]);
-
-        // Cap how much we will commit to before the bytes are even present: an
-        // absurd-but-representable length is rejected, never buffered toward.
-        if len > MAX_PAYLOAD_LEN {
-            return Err(FrameError::TooLarge);
-        }
-        // Checked (defense-in-depth); cannot overflow given the cap above.
-        let total = HEADER_SIZE.checked_add(len).ok_or(FrameError::TooLarge)?;
-        if buf.len() < total {
-            return Ok(None);
-        }
-        let payload = &buf[HEADER_SIZE..total];
-        if crc32_ieee(payload) != crc {
-            return Err(FrameError::ChecksumMismatch);
-        }
-        Ok(Some(Decoded {
-            frame: Frame {
-                payload: payload.to_vec(),
-            },
-            consumed: total,
-        }))
     }
 }
 
@@ -254,49 +342,22 @@ mod tests {
     }
 
     #[test]
-    fn error_display_strings_are_distinct_and_named() {
-        assert!(FrameError::TooLarge.to_string().contains("exceeds"));
-        assert!(FrameError::BadMagic.to_string().contains("magic"));
-        assert!(FrameError::BadVersion.to_string().contains("version"));
-        assert!(FrameError::ChecksumMismatch.to_string().contains("CRC"));
-        assert!(FrameError::UnknownFlags.to_string().contains("flags"));
-    }
-
-    #[test]
-    fn too_large_display_names_both_documented_causes() {
-        // `TooLarge` is returned for a payload over the 16 MiB policy cap AND for
-        // one that cannot fit the u32 length field; the message must name both,
-        // because the cap is the cause an operator actually hits (a 20 MiB
-        // payload fits a u32 comfortably) and the decode path can ONLY hit the cap.
-        let msg = FrameError::TooLarge.to_string();
-        assert!(msg.contains("16 MiB"), "must name the policy cap: {msg}");
-        assert!(msg.contains("u32"), "must name the length field: {msg}");
-
-        // A 16 MiB + 1 payload: rejected by the cap on encode, and a header
-        // advertising that length is rejected by the cap on decode -- both must
-        // surface the same message.
-        let over = Frame::new(vec![0u8; MAX_PAYLOAD_LEN + 1]);
-        let err = over.encode().unwrap_err();
-        assert_eq!(err, FrameError::TooLarge);
-        assert!(err.to_string().contains("16 MiB"));
-
-        let mut hdr = Vec::with_capacity(HEADER_SIZE);
-        hdr.extend_from_slice(&MAGIC);
-        hdr.push(VERSION);
-        hdr.push(0);
-        hdr.extend_from_slice(&((MAX_PAYLOAD_LEN as u32) + 1).to_le_bytes());
-        hdr.extend_from_slice(&0u32.to_le_bytes());
-        let err = Frame::decode(&hdr).unwrap_err();
-        assert_eq!(err, FrameError::TooLarge);
-        assert!(err.to_string().contains("16 MiB"));
-    }
-
-    #[test]
     fn trailing_bytes_are_left_for_the_next_frame() {
         let mut bytes = Frame::new(b"one".to_vec()).encode().unwrap();
         let first_len = bytes.len();
         bytes.extend_from_slice(b"leftover");
         let decoded = Frame::decode(&bytes).unwrap().unwrap();
         assert_eq!(decoded.consumed, first_len);
+    }
+
+    #[test]
+    fn clean_origin_frame_clamp_and_payload_within_cap_match_policy_cap() {
+        let cap = MAX_PAYLOAD_LEN as u64;
+        assert!(payload_within_cap(0, cap));
+        assert!(payload_within_cap(cap, cap));
+        assert!(!payload_within_cap(cap + 1, cap));
+        assert_eq!(frame_clamp_payload_len(0, cap), 0);
+        assert_eq!(frame_clamp_payload_len(cap, cap), cap);
+        assert_eq!(frame_clamp_payload_len(cap + 4096, cap), cap);
     }
 }

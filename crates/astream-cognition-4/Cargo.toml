@@ -1,0 +1,11 @@
+[package]
+name = "astream-cognition-4"
+description = "An independent model of deterministic agent turn budgets, shadow audit ledgers, and perception classifiers (shard 4 of 6, batches 115..116); no astream runtime crate and no aterm code calls it. aterm's mail on its bus is `aterm-link`'s, and `survey` and its `sys` verbs are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

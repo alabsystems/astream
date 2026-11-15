@@ -8,7 +8,7 @@
 //! CPU/lock-bound regime (the Relaxed tier). Use this to measure your hardware; do not
 //! read a single-disk Strict run as a scaling win. Compare SHARDS=1 vs 2 vs 4 vs 8.
 //!
-//!   SHARDS=4 PRODUCERS=64 BENCH_N=300 cargo run --release -p astream-broker --example broker_sharded_bench
+//!   SHARDS=4 PRODUCERS=64 BENCH_N=300 targo --unverified run --release -p astream-broker --example broker_sharded_bench
 
 #[cfg(unix)]
 use astream_broker::{ShardedBroker, ShardedClient};

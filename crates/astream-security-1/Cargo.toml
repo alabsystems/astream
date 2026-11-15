@@ -1,0 +1,11 @@
+[package]
+name = "astream-security-1"
+description = "An independent model of cryptographic transcript binding, capability attenuation ceilings, and sidecar seals (shard 1 of 6, batches 121..122); no astream runtime crate and no aterm code calls it. aterm's Autopilot is `aterm-agent`'s harness, and its `syspolicyd` guard is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

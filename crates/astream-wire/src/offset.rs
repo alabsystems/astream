@@ -1,5 +1,28 @@
 //! Per-partition log offsets, with checked arithmetic (no silent wrap).
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "offset_island.rs"]
+mod offset_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::offset_advance_monotone;
+#[cfg(clean_islands)]
+pub use offset_island::offset_advance_monotone;
+
+contract_fn! {
+    /// Whether `earlier` precedes or equals `later` (`earlier <= later`), the
+    /// precondition for [`Offset::delta_from`] to return `Some`.
+    ///
+    /// Verified against `Astream.Wire.TlaLogOffset.offset_precedes_or_eq_isl` by
+    /// `clean-kernel-defeq`.
+    pub const fn offset_precedes_or_eq(earlier: u64, later: u64) -> bool
+    clauses [ensures result == (earlier <= later)]
+    {
+        earlier <= later
+    }
+}
+
 /// A monotonic position within a single partition's log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Offset(pub u64);
@@ -9,13 +32,16 @@ impl Offset {
     pub const ZERO: Offset = Offset(0);
 
     /// The next offset, or `None` on `u64` overflow (never wraps silently).
-    pub fn checked_next(self) -> Option<Offset> {
-        self.0.checked_add(1).map(Offset)
+    pub const fn checked_next(self) -> Option<Offset> {
+        match self.0.checked_add(1) {
+            Some(next) => Some(Offset(next)),
+            None => None,
+        }
     }
 
     /// `self - earlier`, the number of records in between, or `None` if
     /// `earlier > self`.
-    pub fn delta_from(self, earlier: Offset) -> Option<u64> {
+    pub const fn delta_from(self, earlier: Offset) -> Option<u64> {
         self.0.checked_sub(earlier.0)
     }
 }
@@ -41,5 +67,15 @@ mod tests {
         assert_eq!(Offset(10).delta_from(Offset(4)), Some(6));
         assert_eq!(Offset(4).delta_from(Offset(10)), None);
         assert!(Offset(1) > Offset::ZERO);
+        assert!(offset_precedes_or_eq(4, 10));
+        assert!(offset_precedes_or_eq(10, 10));
+        assert!(!offset_precedes_or_eq(10, 4));
+    }
+
+    #[test]
+    fn clean_origin_offset_advance_is_monotone() {
+        assert_eq!(offset_advance_monotone(10, 4), 10);
+        assert_eq!(offset_advance_monotone(10, 10), 10);
+        assert_eq!(offset_advance_monotone(10, 25), 25);
     }
 }

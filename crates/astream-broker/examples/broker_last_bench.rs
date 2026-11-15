@@ -24,7 +24,7 @@
 //!   measurement, and the evidence runner re-measures a bench that misses its bound (best of
 //!   `BENCH_ATTEMPTS`), which a hard `exit` inside the bench would bypass.
 //!
-//!   SUBJECTS=10000 HISTORY=200000 cargo run --release -p astream-broker --example broker_last_bench
+//!   SUBJECTS=10000 HISTORY=200000 targo --unverified run --release -p astream-broker --example broker_last_bench
 
 #[cfg(unix)]
 use astream_broker::{Broker, Client};

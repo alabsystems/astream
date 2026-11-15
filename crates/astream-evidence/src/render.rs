@@ -11,6 +11,76 @@ pub const BEGIN: &str = "<!-- ASTREAM:EVIDENCE:BEGIN -->";
 /// Closing marker of the generated block.
 pub const END: &str = "<!-- ASTREAM:EVIDENCE:END -->";
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "render_island.rs"]
+mod render_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::render_clamp_span_start;
+#[cfg(clean_islands)]
+pub use render_island::render_clamp_span_start;
+
+contract_fn! {
+    /// Verified check that the README `BEGIN` marker precedes or equals the `END` marker
+    /// (`begin_pos <= end_pos`), linked via `clean-kernel-defeq` to `render_markers_ordered_isl`.
+    #[must_use]
+    pub const fn render_markers_ordered(begin_pos: usize, end_pos: usize) -> bool
+    clauses [ensures result == (begin_pos <= end_pos)]
+    {
+        begin_pos <= end_pos
+    }
+}
+
+/// Encode a 16-byte README marker span `(begin_pos, end_pos)` in little-endian byte order.
+#[must_use]
+pub const fn encode_marker_span(begin_pos: u64, end_pos: u64) -> [u8; 16] {
+    [
+        (begin_pos & 0xFF) as u8,
+        ((begin_pos >> 8) & 0xFF) as u8,
+        ((begin_pos >> 16) & 0xFF) as u8,
+        ((begin_pos >> 24) & 0xFF) as u8,
+        ((begin_pos >> 32) & 0xFF) as u8,
+        ((begin_pos >> 40) & 0xFF) as u8,
+        ((begin_pos >> 48) & 0xFF) as u8,
+        ((begin_pos >> 56) & 0xFF) as u8,
+        (end_pos & 0xFF) as u8,
+        ((end_pos >> 8) & 0xFF) as u8,
+        ((end_pos >> 16) & 0xFF) as u8,
+        ((end_pos >> 24) & 0xFF) as u8,
+        ((end_pos >> 32) & 0xFF) as u8,
+        ((end_pos >> 40) & 0xFF) as u8,
+        ((end_pos >> 48) & 0xFF) as u8,
+        ((end_pos >> 56) & 0xFF) as u8,
+    ]
+}
+
+/// Decode a 16-byte README marker span `(begin_pos, end_pos)` from little-endian byte order,
+/// returning `None` if `begin_pos > end_pos`.
+#[must_use]
+pub const fn decode_marker_span(bytes: &[u8; 16]) -> Option<(u64, u64)> {
+    let begin_pos = (bytes[0] as u64)
+        | ((bytes[1] as u64) << 8)
+        | ((bytes[2] as u64) << 16)
+        | ((bytes[3] as u64) << 24)
+        | ((bytes[4] as u64) << 32)
+        | ((bytes[5] as u64) << 40)
+        | ((bytes[6] as u64) << 48)
+        | ((bytes[7] as u64) << 56);
+    let end_pos = (bytes[8] as u64)
+        | ((bytes[9] as u64) << 8)
+        | ((bytes[10] as u64) << 16)
+        | ((bytes[11] as u64) << 24)
+        | ((bytes[12] as u64) << 32)
+        | ((bytes[13] as u64) << 40)
+        | ((bytes[14] as u64) << 48)
+        | ((bytes[15] as u64) << 56);
+    if begin_pos > end_pos {
+        return None;
+    }
+    Some((begin_pos, end_pos))
+}
+
 /// Make `s` safe inside one Markdown table cell: a `|` would end the cell, and a
 /// line break would end the row.
 fn escape(s: &str) -> String {
@@ -55,23 +125,27 @@ pub fn render_block(m: &Manifest) -> String {
 
 /// Replace the block between the markers (inclusive) in `readme`.
 pub fn splice(readme: &str, block: &str) -> Result<String, String> {
-    let b = readme
-        .find(BEGIN)
-        .ok_or("README is missing the BEGIN marker")?;
-    let e = readme.find(END).ok_or("README is missing the END marker")?;
-    if e < b {
+    let Some(b) = readme.find(BEGIN) else {
+        return Err("README is missing the BEGIN marker".to_string());
+    };
+    let Some(e) = readme.find(END) else {
+        return Err("README is missing the END marker".to_string());
+    };
+    if !render_markers_ordered(b, e) {
         return Err("README markers are out of order".to_string());
     }
-    if readme[b + BEGIN.len()..].contains(BEGIN) || readme[e + END.len()..].contains(END) {
+    let after_b = readme.get(b.saturating_add(BEGIN.len())..).unwrap_or("");
+    let after_e = readme.get(e.saturating_add(END.len())..).unwrap_or("");
+    if after_b.contains(BEGIN) || after_e.contains(END) {
         return Err(
             "README has duplicate evidence markers; remove the extra block by hand".to_string(),
         );
     }
-    let e_end = e + END.len();
-    let mut out = String::with_capacity(readme.len());
-    out.push_str(&readme[..b]);
+    let e_end = e.saturating_add(END.len());
+    let mut out = String::new();
+    out.push_str(readme.get(..b).unwrap_or(""));
     out.push_str(block);
-    out.push_str(&readme[e_end..]);
+    out.push_str(readme.get(e_end..).unwrap_or(""));
     Ok(out)
 }
 
@@ -81,29 +155,64 @@ pub fn splice(readme: &str, block: &str) -> Result<String, String> {
 /// duplicate markers are ambiguous and would let a second hand-edited block
 /// escape the doc-tamper comparison (which only inspects the first region), so
 /// they are rejected outright. A generated tree has exactly one block.
+#[allow(clippy::question_mark)]
 pub fn extract(readme: &str) -> Option<String> {
-    let b = readme.find(BEGIN)?;
-    let e = readme.find(END)?;
-    if e < b {
+    let Some(b) = readme.find(BEGIN) else {
+        return None;
+    };
+    let Some(e) = readme.find(END) else {
+        return None;
+    };
+    if !render_markers_ordered(b, e) {
         return None;
     }
-    if readme[b + BEGIN.len()..].contains(BEGIN) {
+    let Some(after_b) = readme.get(b.saturating_add(BEGIN.len())..) else {
+        return None;
+    };
+    if after_b.contains(BEGIN) {
         return None;
     }
-    if readme[e + END.len()..].contains(END) {
+    let Some(after_e) = readme.get(e.saturating_add(END.len())..) else {
+        return None;
+    };
+    if after_e.contains(END) {
         return None;
     }
-    let e_end = e + END.len();
-    Some(readme[b..e_end].to_string())
+    let e_end = e.saturating_add(END.len());
+    let Some(span) = readme.get(b..e_end) else {
+        return None;
+    };
+    Some(span.to_string())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{extract, render_block, splice, BEGIN, END};
+    use super::{
+        decode_marker_span, encode_marker_span, extract, render_block, splice, BEGIN, END,
+    };
     use crate::manifest::Manifest;
 
     fn block(inner: &str) -> String {
         format!("{BEGIN}\n{inner}\n{END}")
+    }
+
+    #[test]
+    fn marker_span_roundtrips_and_rejects_inverted_bounds() {
+        let encoded = encode_marker_span(128, 4096);
+        assert_eq!(decode_marker_span(&encoded), Some((128, 4096)));
+        let inverted = encode_marker_span(4096, 128);
+        assert_eq!(decode_marker_span(&inverted), None);
+
+        // The wire carries u64 positions, including on a 32-bit reader.
+        let wide_ordered = encode_marker_span(u32::MAX as u64, 1u64 << 32);
+        assert_eq!(
+            decode_marker_span(&wide_ordered),
+            Some((u32::MAX as u64, 1u64 << 32))
+        );
+        let wide_inverted = encode_marker_span(1u64 << 32, 0);
+        assert_eq!(decode_marker_span(&wide_inverted), None);
+        let last = encode_marker_span(u64::MAX, u64::MAX);
+        assert_eq!(decode_marker_span(&last), Some((u64::MAX, u64::MAX)));
     }
 
     #[test]
@@ -132,15 +241,15 @@ mod tests {
 
     #[test]
     fn platform_gated_rows_are_annotated() {
-        let text = "[meta]\nproject = \"p\"\n\n[[claim]]\nid = \"everywhere\"\nkind = \"test\"\ntext = \"t\"\ncommand = \"cargo test --locked\"\n\n[[claim]]\nid = \"linux.only\"\nkind = \"test\"\ntext = \"t\"\ncommand = \"cargo test --locked --test x\"\nplatform = \"linux\"\n";
+        let text = "[meta]\nproject = \"p\"\n\n[[claim]]\nid = \"everywhere\"\nkind = \"test\"\ntext = \"t\"\ncommand = \"targo --unverified test --locked\"\n\n[[claim]]\nid = \"linux.only\"\nkind = \"test\"\ntext = \"t\"\ncommand = \"targo --unverified test --locked --test x\"\nplatform = \"linux\"\n";
         let m = Manifest::parse(text, "mem").expect("parses");
         let rendered = render_block(&m);
         assert!(
-            rendered.contains("| `linux.only` | t | `cargo test --locked --test x` (re-run on linux only; skipped elsewhere) |"),
+            rendered.contains("| `linux.only` | t | `targo --unverified test --locked --test x` (re-run on linux only; skipped elsewhere) |"),
             "{rendered}"
         );
         assert!(
-            rendered.contains("| `everywhere` | t | `cargo test --locked` |"),
+            rendered.contains("| `everywhere` | t | `targo --unverified test --locked` |"),
             "{rendered}"
         );
     }
@@ -149,11 +258,11 @@ mod tests {
     fn a_line_break_in_a_claim_stays_inside_its_table_row() {
         // A Markdown table row is one line: a newline in the text (a TOML `\n`
         // escape) would end the row and spill the rest out of the table.
-        let text = "[meta]\nproject = \"p\"\n\n[[claim]]\nid = \"nl\"\nkind = \"test\"\ntext = \"first\\nsecond\\r\\nthird\"\ncommand = \"cargo test --locked\"\n";
+        let text = "[meta]\nproject = \"p\"\n\n[[claim]]\nid = \"nl\"\nkind = \"test\"\ntext = \"first\\nsecond\\r\\nthird\"\ncommand = \"targo --unverified test --locked\"\n";
         let m = Manifest::parse(text, "mem").expect("parses");
         let rendered = render_block(&m);
         assert!(
-            rendered.contains("| `nl` | first second third | `cargo test --locked` |"),
+            rendered.contains("| `nl` | first second third | `targo --unverified test --locked` |"),
             "{rendered}"
         );
     }

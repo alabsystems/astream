@@ -1,0 +1,12 @@
+[package]
+name = "astream-quota-sched"
+description = "An independent model of multi-pool (`Gemini`, `Claude`, `GPT`) 5-hour and weekly rolling quota buckets, `aterm harness agy pick` low-pool model rotation, worker fanout admission, EWMA burn forecasting, and FNV-1a retry jitter; no astream runtime crate and no aterm code calls it. `aterm harness agy pick` is aterm's own code, `aterm-agent`'s `harness::agy_quota`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }

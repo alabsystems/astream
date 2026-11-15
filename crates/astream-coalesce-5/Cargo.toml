@@ -1,0 +1,11 @@
+[package]
+name = "astream-coalesce-5"
+description = "An independent model of Macaroon discharge, Last radix cursors, SIGMA identity binding, damage coalescing, and restart fences (shard 5 of 6, batches 57..58); no astream runtime crate and no aterm code calls it. aterm's mail on its bus is `aterm-link`'s, and its OSC 52 guard, `restart` verb, `survey` and privacy guard are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

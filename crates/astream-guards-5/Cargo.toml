@@ -1,0 +1,11 @@
+[package]
+name = "astream-guards-5"
+description = "An independent model of lineage step-cap guards, NNpsk0 DH role guards, retention mail guards, and barrier epoch laws (shard 5 of 6, batches 153..154); no astream runtime crate and no aterm code calls it. aterm's mail hold rules are `aterm-link`'s `broker_rules.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

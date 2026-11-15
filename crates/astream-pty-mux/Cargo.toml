@@ -1,0 +1,11 @@
+[package]
+name = "astream-pty-mux"
+description = "An independent model of PTY `TIOCSWINSZ` resize-epoch synchronization, master-FD read-pause flow watermarks, bracketed-paste close-marker sanitization, foreground signal escalation, split-chunk UTF-8 carry, and `OSC 52` clipboard ACLs; no astream runtime crate and no aterm code calls it. astream's shipped PTY host is `astream-host`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

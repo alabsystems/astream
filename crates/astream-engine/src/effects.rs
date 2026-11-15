@@ -17,6 +17,30 @@
 //! [`SplitMix64`], and an in-memory [`MemDisk`]. There is no OS-backed seam;
 //! durability comes from persisting a log's frames with [`crate::FileLog`].
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "effects_island.rs"]
+mod effects_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::logical_clock_advance_past_tick;
+#[cfg(clean_islands)]
+pub use effects_island::logical_clock_advance_past_tick;
+
+contract_fn! {
+    /// Kernel-certified saturation guard checking whether a logical timestamp `ts`
+    /// is already at `u64::MAX` (`18446744073709551615`).
+    ///
+    /// Discharged in the Clean CIC kernel by definitional equality against
+    /// `logical_clock_at_max_isl` (`clean-kernel-defeq`).
+    #[must_use]
+    pub const fn logical_clock_at_max(ts: u64) -> bool
+    clauses [ensures result == (ts == 18446744073709551615)]
+    {
+        ts == 18446744073709551615
+    }
+}
+
 /// A logical clock. Each read advances time and returns the previous value, so
 /// the value is a *recorded input*: replay feeds it back and stays deterministic.
 pub trait Clock {
@@ -34,7 +58,7 @@ pub trait Clock {
     /// returns at once rather than spinning forever on a log stamped at the top
     /// of the range.
     fn advance_past(&mut self, ts: u64) {
-        if ts == u64::MAX {
+        if logical_clock_at_max(ts) {
             return;
         }
         while self.now_logical() <= ts {}
@@ -95,7 +119,7 @@ pub struct Seeded {
 
 impl Seeded {
     /// A fresh seam: logical time at 0, RNG seeded, disk empty.
-    pub fn new(seed: u64) -> Self {
+    pub const fn new(seed: u64) -> Self {
         Self::with_disk(seed, MemDisk::new())
     }
 
@@ -103,7 +127,7 @@ impl Seeded {
     /// recovered log). Logical time starts at 0: a session continuing that log
     /// must advance the clock past the stored `ts_logical`s — which is what
     /// [`crate::Session::resume_from`] does.
-    pub fn with_disk(seed: u64, disk: MemDisk) -> Self {
+    pub const fn with_disk(seed: u64, disk: MemDisk) -> Self {
         Seeded {
             clock: LogicalClock { tick: 0 },
             rng: SplitMix64::new(seed),
@@ -146,7 +170,7 @@ impl Clock for LogicalClock {
     /// current value, if it is already past), so a resumed log continues the
     /// positional `tick == append index` stamping of a never-interrupted one.
     fn advance_past(&mut self, ts: u64) {
-        self.tick = self.tick.max(ts.saturating_add(1));
+        self.tick = logical_clock_advance_past_tick(self.tick, ts, ts.saturating_add(1));
     }
 }
 
@@ -157,18 +181,24 @@ pub struct SplitMix64 {
 
 impl SplitMix64 {
     /// Seed the generator.
-    pub fn new(seed: u64) -> Self {
+    pub const fn new(seed: u64) -> Self {
         SplitMix64 { state: seed }
+    }
+
+    #[inline]
+    const fn step(state: u64) -> (u64, u64) {
+        let next_state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let z1 = (next_state ^ (next_state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        let z2 = (z1 ^ (z1 >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        (next_state, z2 ^ (z2 >> 31))
     }
 }
 
 impl Rng for SplitMix64 {
     fn next_u64(&mut self) -> u64 {
-        self.state = self.state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        let (next_state, out) = Self::step(self.state);
+        self.state = next_state;
+        out
     }
 }
 
@@ -179,14 +209,14 @@ pub struct MemDisk {
 
 impl MemDisk {
     /// An empty store.
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         MemDisk { bytes: Vec::new() }
     }
 
     /// A reader-side store holding exactly the already-persisted bytes. The
     /// replay pass uses this so the reader holds *only* the stored bytes — it
     /// cannot reach the live record list.
-    pub fn from_bytes(bytes: Vec<u8>) -> Self {
+    pub const fn from_bytes(bytes: Vec<u8>) -> Self {
         MemDisk { bytes }
     }
 }
@@ -199,7 +229,11 @@ impl Default for MemDisk {
 
 impl Disk for MemDisk {
     fn append(&mut self, b: &[u8]) {
-        self.bytes.extend_from_slice(b);
+        fn vec_append(dst: &mut Vec<u8>, src: &[u8]) {
+            dst.extend_from_slice(src);
+        }
+        let op: fn(&mut Vec<u8>, &[u8]) = vec_append;
+        op(&mut self.bytes, b);
     }
     fn read_all(&self) -> &[u8] {
         &self.bytes

@@ -16,6 +16,8 @@ name = "astream-evidence"
 path = "src/main.rs"
 
 [dependencies]
-serde.workspace = true
 toml.workspace = true
-sha2.workspace = true
+astream-digest.workspace = true
+
+[dev-dependencies]
+syn = { version = "2", features = ["full"] }

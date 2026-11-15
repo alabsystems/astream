@@ -1,0 +1,11 @@
+[package]
+name = "astream-cognition-1"
+description = "An independent model of deterministic agent turn budgets, shadow audit ledgers, and perception classifiers (shard 1 of 6, batches 109..110); no astream runtime crate and no aterm code calls it. aterm's `restart` verb and its privacy and install guards are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

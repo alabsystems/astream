@@ -1,0 +1,10 @@
+#![allow(
+    clippy::manual_map,
+    clippy::question_mark,
+    clippy::manual_unwrap_or,
+    clippy::manual_unwrap_or_default,
+    clippy::manual_range_contains,
+    clippy::vec_init_then_push,
+    clippy::while_let_on_iterator,
+    clippy::needless_borrows_for_generic_args
+)]

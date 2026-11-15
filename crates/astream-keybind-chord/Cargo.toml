@@ -1,0 +1,11 @@
+[package]
+name = "astream-keybind-chord"
+description = "An independent model of a Kitty `CSI u` lossless modifier decoder, multi-key leader-chord timeout FSM, macOS IME `markedText` composition fence, remote-stall key-repeat governor, SGR `?1006` mouse coordinate clamp, and `?1004` focus debouncer; no astream runtime crate and no aterm code calls it. aterm's keyboard and mouse input is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

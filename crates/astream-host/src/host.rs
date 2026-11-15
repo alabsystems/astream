@@ -9,6 +9,25 @@ use std::collections::VecDeque;
 use std::io::{self, Read};
 use std::os::raw::c_int;
 
+#[cfg(clean_islands)]
+#[path = "host_island.rs"]
+mod host_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::pty_reap_state_advance;
+#[cfg(clean_islands)]
+pub use host_island::pty_reap_state_advance;
+
+contract_fn! {
+    /// Verified check that a PTY read returned a non-empty chunk (`n > 0`),
+    /// linked via `clean-kernel-defeq` to `pty_chunk_non_empty_isl`.
+    #[must_use]
+    pub const fn pty_chunk_non_empty(n: usize) -> bool
+    clauses [ensures result == (n > 0)]
+    {
+        n > 0
+    }
+}
+
 /// Cap on the output held in [`Pty`]'s pending buffer while a
 /// [`write_input`](Pty::write_input) waits for kernel input-queue space (8 MiB).
 ///
@@ -17,6 +36,57 @@ use std::os::raw::c_int;
 /// input while flooding the master would otherwise grow this without limit
 /// until the orchestrator is OOM-killed.
 pub const PENDING_MAX: usize = 8 << 20;
+
+/// Encode a 10-byte PTY lifecycle state frame `(pid, reaped, exit_code)` in little-endian order.
+#[must_use]
+pub const fn encode_pty_lifecycle_state(
+    pid: i32,
+    reaped: bool,
+    exit_code: Option<i32>,
+) -> [u8; 10] {
+    let p = pid as u32;
+    let r = if reaped { 1u8 } else { 0u8 };
+    let (has_code, code) = match exit_code {
+        Some(c) => (1u8, c as u32),
+        None => (0u8, 0u32),
+    };
+    [
+        (p & 0xFF) as u8,
+        ((p >> 8) & 0xFF) as u8,
+        ((p >> 16) & 0xFF) as u8,
+        ((p >> 24) & 0xFF) as u8,
+        r,
+        has_code,
+        (code & 0xFF) as u8,
+        ((code >> 8) & 0xFF) as u8,
+        ((code >> 16) & 0xFF) as u8,
+        ((code >> 24) & 0xFF) as u8,
+    ]
+}
+
+/// Decode a 10-byte PTY lifecycle state frame `(pid, reaped, exit_code)` from little-endian order.
+#[must_use]
+pub const fn decode_pty_lifecycle_state(bytes: &[u8; 10]) -> Option<(i32, bool, Option<i32>)> {
+    let p = (bytes[0] as u32)
+        | ((bytes[1] as u32) << 8)
+        | ((bytes[2] as u32) << 16)
+        | ((bytes[3] as u32) << 24);
+    let reaped = match bytes[4] {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    let code = (bytes[6] as u32)
+        | ((bytes[7] as u32) << 8)
+        | ((bytes[8] as u32) << 16)
+        | ((bytes[9] as u32) << 24);
+    let exit_code = match bytes[5] {
+        0 if code == 0 => None,
+        1 if reaped => Some(code as i32),
+        _ => return None,
+    };
+    Some((p as i32, reaped, exit_code))
+}
 
 /// An error from the host: an OS error, or an engine append error.
 #[derive(Debug)]
@@ -127,9 +197,12 @@ impl Pty {
     pub fn write_input(&mut self, bytes: &[u8]) -> io::Result<usize> {
         let mut off = 0;
         while off < bytes.len() {
-            match sys::write_master(self.master, &bytes[off..]) {
+            let Some(tail) = bytes.get(off..) else {
+                break;
+            };
+            match sys::write_master(self.master, tail) {
                 Ok(0) => return Err(io::Error::from(io::ErrorKind::WriteZero)),
-                Ok(n) => off += n,
+                Ok(n) => off = off.saturating_add(n),
                 Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
                     let (readable, _writable) = sys::wait_master(self.master, true)?;
                     if readable {
@@ -142,8 +215,22 @@ impl Pty {
                                 ))
                             }
                             Some(n) => {
-                                self.pending.extend(&buf[..n]);
-                                if self.pending.len() > PENDING_MAX {
+                                let Some(chunk) = buf.get(..n) else {
+                                    break;
+                                };
+                                let next_len =
+                                    self.pending.len().saturating_add(chunk.len()) as u64;
+                                self.pending.extend(chunk);
+                                if crate::driver::pty_admit_drain_chunk(
+                                    next_len,
+                                    PENDING_MAX as u64,
+                                    chunk.len() as u64,
+                                ) == 0
+                                    || !crate::driver::pending_within_cap(
+                                        self.pending.len() as u64,
+                                        PENDING_MAX as u64,
+                                    )
+                                {
                                     return Err(io::Error::other(
                                         "the drain buffer filled (8 MiB) while the child was not consuming its input",
                                     ));
@@ -176,14 +263,18 @@ impl Pty {
     /// process, whose exit status a second wait would steal.
     pub fn reap(&mut self) -> io::Result<i32> {
         if self.reaped {
-            return self
-                .exit_code
-                .ok_or_else(|| io::Error::from_raw_os_error(libc::ECHILD));
+            return match self.exit_code {
+                Some(code) => Ok(code),
+                None => Err(io::Error::from_raw_os_error(libc::ECHILD)),
+            };
         }
         let outcome = sys::reap(self.pid);
         if sys::reap_settles(&outcome) {
-            self.reaped = true;
-            self.exit_code = outcome.as_ref().ok().copied();
+            self.reaped = pty_reap_state_advance(u64::from(self.reaped), 1) != 0;
+            self.exit_code = match &outcome {
+                Ok(code) => Some(*code),
+                Err(_) => None,
+            };
         }
         outcome
     }
@@ -205,10 +296,13 @@ impl Pty {
         let mut buf = [0u8; 4096];
         loop {
             let n = self.read_chunk(&mut buf)?;
-            if n == 0 {
+            if !pty_chunk_non_empty(n) {
                 break;
             }
-            let rec = Record::Out(buf[..n].to_vec());
+            let Some(chunk) = buf.get(..n) else {
+                break;
+            };
+            let rec = Record::Out(chunk.to_vec());
             log.append(fx, rec.clone())?;
             chunks.push(rec);
         }
@@ -232,5 +326,29 @@ impl Drop for Pty {
             sys::kill(self.pid, libc::SIGKILL);
             let _ = sys::reap(self.pid);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pty_lifecycle_state_roundtrips_and_validates() {
+        let live = encode_pty_lifecycle_state(4242, false, None);
+        assert_eq!(decode_pty_lifecycle_state(&live), Some((4242, false, None)));
+        let exited = encode_pty_lifecycle_state(4242, true, Some(137));
+        assert_eq!(
+            decode_pty_lifecycle_state(&exited),
+            Some((4242, true, Some(137)))
+        );
+        let echild = encode_pty_lifecycle_state(4242, true, None);
+        assert_eq!(
+            decode_pty_lifecycle_state(&echild),
+            Some((4242, true, None))
+        );
+        let mut bad = live;
+        bad[5] = 1; // exit_code present while reaped == false
+        assert_eq!(decode_pty_lifecycle_state(&bad), None);
     }
 }

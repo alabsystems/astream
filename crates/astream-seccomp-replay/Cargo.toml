@@ -1,0 +1,12 @@
+[package]
+name = "astream-seccomp-replay"
+description = "An independent model of seccomp-BPF foreign-process deterministic record/replay (`docs/ROADMAP.md` §4): `SECCOMP_RET_TRACE` 5-syscall pre-filter mask, replay-time syscall no-op neutralization gate, taped return/buffer injector, `PTRACE_TRACEME` single-thread `execve` lineage, short/wrong-kind tape abort latch, and independent SHA-256 oracle parity check; no astream runtime crate and no aterm code calls it. The roadmap item is open: its seed test, `astream-host`'s `seccomp_record_replay`, does not exist yet. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

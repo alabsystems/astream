@@ -1,0 +1,11 @@
+[package]
+name = "astream-flow-5"
+description = "An independent model of adaptive flow control, backpressure horizons, session multiplexing, and replay determinism (shard 5 of 6, batches 69..70); no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

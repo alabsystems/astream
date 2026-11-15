@@ -1,0 +1,12 @@
+[package]
+name = "astream-subagent-dag"
+description = "An independent model of hierarchical subagent recursion/fanout caps, reactive wakeup inbox cursors, `inherit`/`branch`/`share` workspace isolation leases, bottom-up cascade reaping, token rollup, and SHA-256 handoff pins; no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

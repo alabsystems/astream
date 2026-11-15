@@ -1,0 +1,11 @@
+[package]
+name = "astream-guards-6"
+description = "An independent model of lineage step-cap guards, NNpsk0 DH role guards, retention mail guards, and barrier epoch laws (shard 6 of 6, batches 155..156); no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

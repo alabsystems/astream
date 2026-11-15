@@ -1,0 +1,11 @@
+[package]
+name = "astream-sys-telemetry"
+description = "An independent model of `aterm ctl @self sys` Apple Silicon cluster millicore aggregation, `sys jobs` zero-progress stall detection, `fp_bytes`/swap memory-pressure step-down, `await sys` quiet-machine predicates, Darwin QoS throttling diagnostics, and `gpu_ppm` budgets; no astream runtime crate and no aterm code calls it. `aterm ctl @self sys` is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

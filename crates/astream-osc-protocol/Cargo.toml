@@ -1,0 +1,12 @@
+[package]
+name = "astream-osc-protocol"
+description = "An independent model of a terminal OSC 52 base64 clipboard budget, OSC 8 URI scheme sanitizer, OSC 133 semantic prompt zone state machine, Kitty graphics pixel-RAM quota, DEC `?2026` synchronized-output timeout flush, and `?2004` bracketed-paste armor; no astream runtime crate and no aterm code calls it. aterm's terminal handles these sequences in its own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

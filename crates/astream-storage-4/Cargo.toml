@@ -1,0 +1,11 @@
+[package]
+name = "astream-storage-4"
+description = "An independent model of at-rest AAD log binding, inbox cursor fencing, and crash-safe journal compaction (shard 4 of 6, batches 103..104); no astream runtime crate and no aterm code calls it. aterm's mail on its bus is `aterm-link`'s and its Autopilot is `aterm-agent`'s harness; `bus_cut_consistency_fence` models the bus-cut replay aterm cut (`06426ed3f` removed `replay.rs`). forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

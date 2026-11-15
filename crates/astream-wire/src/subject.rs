@@ -13,13 +13,53 @@
 
 use std::fmt;
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "subject_island.rs"]
+mod subject_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::segment_depth_advance;
+#[cfg(clean_islands)]
+pub use subject_island::segment_depth_advance;
+
+contract_fn! {
+    /// Whether a filter prefix of depth `filter_prefix_depth` can match or contain a
+    /// subject/filter of depth `subject_depth` (`filter_prefix_depth <= subject_depth`).
+    ///
+    /// Verified against `Astream.Wire.TlaSubjectFilter.filter_depth_contains_isl` by
+    /// `clean-kernel-defeq`.
+    pub const fn filter_depth_contains(filter_prefix_depth: u64, subject_depth: u64) -> bool
+    clauses [ensures result == (filter_prefix_depth <= subject_depth)]
+    {
+        filter_prefix_depth <= subject_depth
+    }
+}
+
+const fn find_slash(mut rest: &[u8]) -> Option<usize> {
+    let mut idx = 0usize;
+    while let &[b, ref tail @ ..] = rest {
+        if b == b'/' {
+            return Some(idx);
+        }
+        idx = idx.saturating_add(1);
+        rest = tail;
+    }
+    None
+}
+
 /// Iterate the segments of a `/`-rooted path, dropping the leading empty piece:
 /// exactly `path.split('/').skip(1)`, as a plain byte scan (the matcher's hot
 /// loop re-splits both the filter and the subject on every call).
 fn segments(path: &str) -> Segments<'_> {
-    Segments {
-        rest: path.find('/').map(|i| &path[i + 1..]),
-    }
+    let rest = match find_slash(path.as_bytes()) {
+        Some(i) => match i.checked_add(1) {
+            Some(next) => path.get(next..),
+            None => None,
+        },
+        None => None,
+    };
+    Segments { rest }
 }
 
 struct Segments<'a> {
@@ -33,10 +73,13 @@ impl<'a> Iterator for Segments<'a> {
     fn next(&mut self) -> Option<&'a str> {
         let rest = self.rest?;
         // `/` is ASCII, so both slice points are char boundaries.
-        match rest.bytes().position(|b| b == b'/') {
+        match find_slash(rest.as_bytes()) {
             Some(i) => {
-                self.rest = Some(&rest[i + 1..]);
-                Some(&rest[..i])
+                self.rest = match i.checked_add(1) {
+                    Some(next) => rest.get(next..),
+                    None => None,
+                };
+                rest.get(..i)
             }
             None => {
                 self.rest = None;
@@ -61,16 +104,23 @@ pub enum SubjectError {
     ControlByte,
 }
 
-impl fmt::Display for SubjectError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let msg = match self {
+impl SubjectError {
+    /// Static human-readable description of the subject validation error.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
             SubjectError::Empty => "subject is empty",
             SubjectError::MissingLeadingSlash => "subject must start with '/'",
             SubjectError::EmptySegment => "subject has an empty segment",
             SubjectError::ContainsWildcard => "subject must not contain '*' or '>'",
             SubjectError::ControlByte => "subject must not contain control bytes",
-        };
-        f.write_str(msg)
+        }
+    }
+}
+
+impl fmt::Display for SubjectError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -85,13 +135,16 @@ impl Subject {
     /// Validate and construct, or explain why the input is rejected.
     pub fn new(s: impl Into<String>) -> Result<Self, SubjectError> {
         let s = s.into();
-        validate_subject(&s)?;
-        Ok(Subject(s))
+        match validate_subject(&s) {
+            Ok(()) => Ok(Subject(s)),
+            Err(e) => Err(e),
+        }
     }
 
     /// The full subject path.
-    pub fn as_str(&self) -> &str {
-        &self.0
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
+        self.0.as_str()
     }
 
     /// The segments, wildcard-free by construction.
@@ -118,17 +171,24 @@ pub enum FilterError {
     ControlByte,
 }
 
-impl fmt::Display for FilterError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let msg = match self {
+impl FilterError {
+    /// Static human-readable description of the filter validation error.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
             FilterError::Empty => "filter is empty",
             FilterError::MissingLeadingSlash => "filter must start with '/'",
             FilterError::EmptySegment => "filter has an empty segment",
             FilterError::PartialWildcard => "wildcards must be a whole segment ('*' or '>')",
             FilterError::MultiNotLast => "'>' must be the final segment",
             FilterError::ControlByte => "filter must not contain control bytes",
-        };
-        f.write_str(msg)
+        }
+    }
+}
+
+impl fmt::Display for FilterError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
@@ -136,58 +196,195 @@ impl std::error::Error for FilterError {}
 
 /// Check every segment of a `/`-rooted pattern, reporting the first failure in
 /// document order.
-/// The [`Subject::new`] grammar, checked in place with no allocation.
-fn validate_subject(s: &str) -> Result<(), SubjectError> {
-    if s.is_empty() {
+/// The [`Subject::new`] grammar, checked in place with no allocation and a single
+/// byte scan per segment.
+pub const fn validate_subject(s: &str) -> Result<(), SubjectError> {
+    let bytes = s.as_bytes();
+    let &[first, ref after_slash @ ..] = bytes else {
         return Err(SubjectError::Empty);
-    }
-    if !s.starts_with('/') {
+    };
+    if first != b'/' {
         return Err(SubjectError::MissingLeadingSlash);
     }
-    for seg in segments(s) {
-        if seg.is_empty() {
-            return Err(SubjectError::EmptySegment);
-        }
-        if seg.contains('*') || seg.contains('>') {
+    let mut rest = after_slash;
+    let mut seg_len = 0usize;
+    let mut seg_has_ctrl = false;
+    while let &[b, ref tail @ ..] = rest {
+        if b == b'/' {
+            if seg_len == 0 {
+                return Err(SubjectError::EmptySegment);
+            }
+            if seg_has_ctrl {
+                return Err(SubjectError::ControlByte);
+            }
+            seg_len = 0;
+            seg_has_ctrl = false;
+        } else if b == b'*' || b == b'>' {
             return Err(SubjectError::ContainsWildcard);
+        } else {
+            if b < 0x20 || b == 0x7f {
+                seg_has_ctrl = true;
+            }
+            seg_len = seg_len.saturating_add(1);
         }
-        if seg.bytes().any(|b| b < 0x20 || b == 0x7f) {
-            return Err(SubjectError::ControlByte);
-        }
+        rest = tail;
+    }
+    if seg_len == 0 {
+        return Err(SubjectError::EmptySegment);
+    }
+    if seg_has_ctrl {
+        return Err(SubjectError::ControlByte);
     }
     Ok(())
 }
 
-fn validate_filter_segments(path: &str) -> Result<(), FilterError> {
-    let mut parts = segments(path).peekable();
-    while let Some(part) = parts.next() {
-        if part.is_empty() {
-            return Err(FilterError::EmptySegment);
-        }
-        match part {
-            SINGLE => {}
-            MULTI => {
-                if parts.peek().is_some() {
-                    return Err(FilterError::MultiNotLast);
-                }
+/// Validate a `/`-rooted subscription filter string in place.
+pub const fn validate_filter_str(path: &str) -> Result<(), FilterError> {
+    let bytes = path.as_bytes();
+    let &[first, ref after_slash @ ..] = bytes else {
+        return Err(FilterError::Empty);
+    };
+    if first != b'/' {
+        return Err(FilterError::MissingLeadingSlash);
+    }
+    let mut rest = after_slash;
+    let mut seg_len = 0usize;
+    let mut seg_wild = 0u8;
+    let mut seg_has_ctrl = false;
+    while let &[b, ref tail @ ..] = rest {
+        if b == b'/' {
+            if seg_len == 0 {
+                return Err(FilterError::EmptySegment);
             }
-            lit => {
-                if lit.contains('*') || lit.contains('>') {
-                    return Err(FilterError::PartialWildcard);
-                }
-                if lit.bytes().any(|b| b < 0x20 || b == 0x7f) {
-                    return Err(FilterError::ControlByte);
-                }
+            if seg_len == 1 && seg_wild == b'>' {
+                return Err(FilterError::MultiNotLast);
             }
+            if seg_wild != 0 && !(seg_len == 1 && seg_wild == b'*') {
+                return Err(FilterError::PartialWildcard);
+            }
+            if seg_has_ctrl {
+                return Err(FilterError::ControlByte);
+            }
+            seg_len = 0;
+            seg_wild = 0;
+            seg_has_ctrl = false;
+        } else {
+            if b == b'*' || b == b'>' {
+                seg_wild = b;
+            } else if b < 0x20 || b == 0x7f {
+                seg_has_ctrl = true;
+            }
+            seg_len = seg_len.saturating_add(1);
         }
+        rest = tail;
+    }
+    if seg_len == 0 {
+        return Err(FilterError::EmptySegment);
+    }
+    if seg_len == 1 && (seg_wild == b'*' || seg_wild == b'>') {
+        return Ok(());
+    }
+    if seg_wild != 0 {
+        return Err(FilterError::PartialWildcard);
+    }
+    if seg_has_ctrl {
+        return Err(FilterError::ControlByte);
     }
     Ok(())
 }
 
-/// `*` — exactly one segment.
-const SINGLE: &str = "*";
-/// `>` — one or more trailing segments.
-const MULTI: &str = ">";
+const fn skip_to_after_slash(mut rem: &[u8]) -> Option<&[u8]> {
+    while let &[b, ref tail @ ..] = rem {
+        if b == b'/' {
+            return Some(tail);
+        }
+        rem = tail;
+    }
+    None
+}
+
+#[derive(Clone, Copy)]
+enum LiteralStep<'a, 'b> {
+    BothEnded,
+    BothContinue(&'a [u8], &'b [u8]),
+    Mismatch,
+}
+
+const fn step_literal_segment<'a, 'b>(a: &'a [u8], b: &'b [u8]) -> LiteralStep<'a, 'b> {
+    let mut ar = a;
+    let mut br = b;
+    while let &[ba, ref ta @ ..] = ar {
+        let &[bb, ref tb @ ..] = br else {
+            return LiteralStep::Mismatch;
+        };
+        if ba == b'/' && bb == b'/' {
+            return LiteralStep::BothContinue(ta, tb);
+        }
+        if ba == b'/' || bb == b'/' || ba != bb {
+            return LiteralStep::Mismatch;
+        }
+        ar = ta;
+        br = tb;
+    }
+    if br.is_empty() {
+        LiteralStep::BothEnded
+    } else {
+        LiteralStep::Mismatch
+    }
+}
+
+const fn filter_matches_after_slash(mut f_rem: &[u8], mut s_rem: &[u8]) -> bool {
+    loop {
+        match f_rem {
+            b">" => return true,
+            b"*" => return skip_to_after_slash(s_rem).is_none(),
+            &[b'*', b'/', ref f_next @ ..] => {
+                let Some(s_next) = skip_to_after_slash(s_rem) else {
+                    return false;
+                };
+                f_rem = f_next;
+                s_rem = s_next;
+            }
+            _ => match step_literal_segment(f_rem, s_rem) {
+                LiteralStep::BothEnded => return true,
+                LiteralStep::BothContinue(f_next, s_next) => {
+                    f_rem = f_next;
+                    s_rem = s_next;
+                }
+                LiteralStep::Mismatch => return false,
+            },
+        }
+    }
+}
+
+const fn filter_contains_after_slash(mut a_rem: &[u8], mut b_rem: &[u8]) -> bool {
+    loop {
+        match a_rem {
+            b">" => return true,
+            b"*" => {
+                return !matches!(b_rem, b">") && skip_to_after_slash(b_rem).is_none();
+            }
+            &[b'*', b'/', ref a_next @ ..] => {
+                if matches!(b_rem, b">" | &[b'>', b'/', ..]) {
+                    return false;
+                }
+                let Some(b_next) = skip_to_after_slash(b_rem) else {
+                    return false;
+                };
+                a_rem = a_next;
+                b_rem = b_next;
+            }
+            _ => match step_literal_segment(a_rem, b_rem) {
+                LiteralStep::BothEnded => return true,
+                LiteralStep::BothContinue(a_next, b_next) => {
+                    a_rem = a_next;
+                    b_rem = b_next;
+                }
+                LiteralStep::Mismatch => return false,
+            },
+        }
+    }
+}
 
 /// A validated subscription pattern. It stores only the pattern string, so a
 /// filter parsed from untrusted input costs its own length and nothing per
@@ -196,7 +393,7 @@ const MULTI: &str = ">";
 pub struct Filter {
     // Segments are re-split on use. Every segment of a validated filter is
     // exactly `*`, exactly `>` (last only), or a literal containing neither
-    // character, so comparing a segment against SINGLE/MULTI classifies it.
+    // character, so comparing a segment against `*`/`>` classifies it.
     raw: String,
 }
 
@@ -204,59 +401,52 @@ impl Filter {
     /// Validate and construct, or explain why the input is rejected.
     pub fn new(s: impl Into<String>) -> Result<Self, FilterError> {
         let s = s.into();
-        if s.is_empty() {
-            return Err(FilterError::Empty);
+        match validate_filter_str(&s) {
+            Ok(()) => Ok(Filter { raw: s }),
+            Err(e) => Err(e),
         }
-        if !s.starts_with('/') {
-            return Err(FilterError::MissingLeadingSlash);
-        }
-        validate_filter_segments(&s)?;
-        Ok(Filter { raw: s })
     }
 
     /// The original pattern string.
-    pub fn as_str(&self) -> &str {
-        &self.raw
+    #[must_use]
+    pub const fn as_str(&self) -> &str {
+        self.raw.as_str()
     }
 
     /// Does this filter match the given subject?
     ///
     /// Iterative, allocation-free matcher: it walks the filter and the
-    /// subject's segments in lockstep. (`tests/router_differential.rs` checks it
+    /// subject's segments in lockstep. (`tests/suite/router_differential.rs` checks it
     /// against an independently-coded recursive oracle over generated well-formed
     /// filters and subjects; the malformed and edge inputs go to the *validators*
     /// [`Filter::new`]/[`Subject::new`], whose every error variant that test
     /// reaches by construction.)
-    pub fn matches(&self, subject: &Subject) -> bool {
-        self.matches_segments(subject.segments())
+    #[must_use]
+    pub const fn matches(&self, subject: &Subject) -> bool {
+        let &[b'/', ref f_after @ ..] = self.raw.as_bytes() else {
+            return false;
+        };
+        let &[b'/', ref s_after @ ..] = subject.0.as_bytes() else {
+            return false;
+        };
+        filter_matches_after_slash(f_after, s_after)
     }
 
     /// Whether `subject` is a well-formed subject this filter matches: exactly
     /// `Subject::new(subject).is_ok_and(|s| self.matches(&s))`, without allocating
     /// a [`Subject`]. For scanning stored subject strings under a lock.
-    pub fn matches_str(&self, subject: &str) -> bool {
-        validate_subject(subject).is_ok() && self.matches_segments(segments(subject))
-    }
-
-    fn matches_segments<'a>(&self, mut subj: impl Iterator<Item = &'a str>) -> bool {
-        for seg in segments(&self.raw) {
-            match seg {
-                // `>` matches one or more remaining segments: require at least one.
-                MULTI => return subj.next().is_some(),
-                SINGLE => {
-                    if subj.next().is_none() {
-                        return false;
-                    }
-                }
-                lit => {
-                    if subj.next() != Some(lit) {
-                        return false;
-                    }
-                }
-            }
-        }
-        // Filter exhausted: match iff the subject is exhausted too.
-        subj.next().is_none()
+    ///
+    /// Checks segment matching first so non-matching subjects short-circuit on the
+    /// first mismatched literal segment without scanning the rest of `subject`.
+    #[must_use]
+    pub const fn matches_str(&self, subject: &str) -> bool {
+        let &[b'/', ref f_after @ ..] = self.raw.as_bytes() else {
+            return false;
+        };
+        let &[b'/', ref s_after @ ..] = subject.as_bytes() else {
+            return false;
+        };
+        filter_matches_after_slash(f_after, s_after) && matches!(validate_subject(subject), Ok(()))
     }
 
     /// Whether this filter **contains** `other`: every subject matching `other`
@@ -268,30 +458,14 @@ impl Filter {
     /// `*` (exactly one) contains a single literal/`*` but never `>`; a literal
     /// contains only the identical literal.
     #[must_use]
-    pub fn contains(&self, other: &Filter) -> bool {
-        let mut b = segments(&other.raw);
-        for sa in segments(&self.raw) {
-            let sb = b.next();
-            match sa {
-                // `>` accepts every subject with at least one more segment; every
-                // subject matching `other` has that iff `other` has a segment here.
-                MULTI => return sb.is_some(),
-                SINGLE => match sb {
-                    // `other` could match a longer, variable tail here — not contained.
-                    None | Some(MULTI) => return false,
-                    Some(_) => {}
-                },
-                // A literal contains only the identical literal (never `*`/`>`,
-                // which no literal equals).
-                la => {
-                    if sb != Some(la) {
-                        return false;
-                    }
-                }
-            }
-        }
-        // `self` exhausted (no trailing `>`): contained iff `other` ends here too.
-        b.next().is_none()
+    pub const fn contains(&self, other: &Filter) -> bool {
+        let &[b'/', ref a_after @ ..] = self.raw.as_bytes() else {
+            return false;
+        };
+        let &[b'/', ref b_after @ ..] = other.raw.as_bytes() else {
+            return false;
+        };
+        filter_contains_after_slash(a_after, b_after)
     }
 }
 
@@ -431,5 +605,15 @@ mod tests {
         assert!(f.matches(&Subject::new("/a/b").unwrap()));
         assert!(!f.matches(&Subject::new("/a").unwrap()));
         assert!(!f.matches(&Subject::new("/a/b/c").unwrap()));
+    }
+
+    #[test]
+    fn clean_origin_segment_depth_and_containment_guards() {
+        assert_eq!(segment_depth_advance(3, 1), 3);
+        assert_eq!(segment_depth_advance(3, 3), 3);
+        assert_eq!(segment_depth_advance(3, 5), 5);
+        assert!(filter_depth_contains(2, 2));
+        assert!(filter_depth_contains(2, 4));
+        assert!(!filter_depth_contains(4, 2));
     }
 }

@@ -1,0 +1,50 @@
+# INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only).
+# astream's claims build and run on the Trust toolchain. Each `stock.*` / `lane.*`
+# command reaches a stock toolchain or leaves the Targo lane unnamed; the
+# `*.fine` commands name their lane on every step.
+[meta]
+project = "fixture-stock-toolchain"
+
+[[claim]]
+id = "stock.cargo"
+kind = "test"
+text = "The suite passes."
+command = "cargo test --locked"
+
+[[claim]]
+id = "stock.chained"
+kind = "build"
+text = "The workspace builds and its suite passes."
+command = "targo --unverified build --locked && cargo test --locked"
+
+[[claim]]
+id = "stock.rustup"
+kind = "bench"
+text = "Throughput holds its floor."
+command = "BENCH_N=5 rustup run stable cargo run --release"
+metric = "ops"
+min_value = 1.0
+
+[[claim]]
+id = "lane.missing"
+kind = "test"
+text = "The suite passes."
+command = "targo test --locked"
+
+[[claim]]
+id = "lane.selector"
+kind = "test"
+text = "The suite passes."
+command = "targo +nightly --unverified test --locked"
+
+[[claim]]
+id = "unverified.fine"
+kind = "test"
+text = "The suite passes."
+command = "targo --unverified test --locked && targo --unverified test --locked --all-features"
+
+[[claim]]
+id = "trust.fine"
+kind = "build"
+text = "The library verifies."
+command = "targo trust check --locked"

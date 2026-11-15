@@ -1,0 +1,11 @@
+[package]
+name = "astream-guards-1"
+description = "An independent model of lineage step-cap guards, NNpsk0 DH role guards, retention mail guards, and barrier epoch laws (shard 1 of 6, batches 145..146); no astream runtime crate and no aterm code calls it. The shipped `read_secret_at` is `astream-cap`'s `capfile.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

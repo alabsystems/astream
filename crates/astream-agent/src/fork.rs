@@ -1,8 +1,38 @@
 //! Record a turn to a cognition log, decode it back, and counterfactually fork it.
+//!
+//! ## Formal Verification (`clean` Island — TLA+ Counterfactual Fork Prefix Stability)
+//!
+//! This module embeds a machine-checked Clean specification (`Astream.Agent.TlaCounterfactualFork`)
+//! of counterfactual cognition-log forking:
+//! - Swapping the record at `forkAt < logLen` produces a forked log where `curLog forkAt = replacementVal`
+//!   and every other index `i ≠ forkAt` (and in particular every prefix index `i < forkAt`)
+//!   is identically preserved (`curLog i = origLog i`), proving `Spec orig n ⊨ □ (Lift PrefixStabilityInv)`
+//!   and `strict_prefix_untouched`.
 
 use crate::cog::CogRecord;
 use crate::envelope::{encode_record, CogEnvelope, CogError};
-use astream_wire::{Frame, Offset};
+use astream_wire::Offset;
+
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "fork_island.rs"]
+mod fork_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::fork_prefix_bound;
+#[cfg(clean_islands)]
+pub use fork_island::fork_prefix_bound;
+
+contract_fn! {
+    /// Pure offset-bounds predicate linked to the Clean island's `fork_offset_in_range_isl`
+    /// and discharged via `clean-kernel-defeq`.
+    #[must_use]
+    pub const fn fork_offset_in_range(at_off: u64, len: u64) -> bool
+    clauses [ensures result == (at_off < len)]
+    {
+        at_off < len
+    }
+}
 
 /// Record a turn as a cognition log: each [`CogRecord`] framed as a `COG_VERSION`
 /// envelope at its offset, with a fixed `ts_logical = seed` (deterministic). The
@@ -27,15 +57,21 @@ pub fn record_turn(seed: u64, records: &[CogRecord]) -> Result<Vec<u8>, CogError
 /// was fully intact, use [`decode_turn_strict`].
 pub fn decode_turn(log: &[u8]) -> Vec<CogRecord> {
     let mut records = Vec::new();
-    let mut pos = 0;
-    while pos < log.len() {
-        match Frame::decode(&log[pos..]) {
-            Ok(Some(decoded)) => {
-                match CogEnvelope::from_payload(&decoded.frame.payload) {
+    // The undecoded tail. Advancing by re-slicing (rather than `pos += consumed`)
+    // leaves no offset arithmetic to overflow. `Frame::decode` reports at most the
+    // bytes it was given, so the re-slice is in range; were it not, decoding stops.
+    let mut rest = log;
+    while !rest.is_empty() {
+        match astream_wire::frame::decode_frame_slice(rest) {
+            Ok(Some((payload, consumed))) => {
+                match CogEnvelope::from_payload(payload) {
                     Ok(env) => records.push(env.record),
                     Err(_) => break,
                 }
-                pos += decoded.consumed;
+                let Some(tail) = rest.get(consumed..) else {
+                    break;
+                };
+                rest = tail;
             }
             _ => break,
         }
@@ -49,13 +85,15 @@ pub fn decode_turn(log: &[u8]) -> Vec<CogRecord> {
 /// miss; use [`decode_turn`] when recovering the longest intact prefix is desired.
 pub fn decode_turn_strict(log: &[u8]) -> Result<Vec<CogRecord>, crate::CogError> {
     let mut records = Vec::new();
-    let mut pos = 0;
-    while pos < log.len() {
-        match Frame::decode(&log[pos..]) {
-            Ok(Some(decoded)) => {
-                let env = CogEnvelope::from_payload(&decoded.frame.payload)?;
+    // The undecoded tail, advanced by re-slicing as in [`decode_turn`].
+    let mut rest = log;
+    while !rest.is_empty() {
+        match astream_wire::frame::decode_frame_slice(rest) {
+            Ok(Some((payload, consumed))) => {
+                let env = CogEnvelope::from_payload(payload)?;
                 records.push(env.record);
-                pos += decoded.consumed;
+                // In range by `decode_frame_slice`'s contract; were it not, fail closed.
+                rest = rest.get(consumed..).ok_or(crate::CogError::BadLen)?;
             }
             // A trailing incomplete frame is a torn tail — surfaced, not dropped.
             Ok(None) => return Err(crate::CogError::Short),
@@ -69,8 +107,37 @@ pub fn decode_turn_strict(log: &[u8]) -> Result<Vec<CogRecord>, crate::CogError>
 /// 64-bit log position; on a target whose `usize` is narrower a truncating cast
 /// would alias `Offset(1 << 32 | 1)` to index 1 and swap the WRONG record, so the
 /// conversion is checked and an unrepresentable offset is simply out of range.
-fn index_in(records: &[CogRecord], at: Offset) -> Option<usize> {
-    usize::try_from(at.0).ok().filter(|&i| i < records.len())
+const fn index_in(records: &[CogRecord], at: Offset) -> Option<usize> {
+    let len = records.len() as u64;
+    if at.0 >= len {
+        return None;
+    }
+    let bounded = if at.0 < len { at.0 } else { len };
+    if bounded > usize::MAX as u64 {
+        return None;
+    }
+    let i = bounded as usize;
+    if i < records.len() {
+        Some(i)
+    } else {
+        None
+    }
+}
+
+/// Return the intact prefix of `records` strictly preceding `at` (clamped to
+/// `records.len()` via the Clean-origin [`fork_prefix_bound`]).
+#[must_use]
+pub fn cog_fork_prefix(records: &[CogRecord], at: Offset) -> &[CogRecord] {
+    let len = records.len();
+    let end = if at.0 < len as u64 {
+        at.0 as usize
+    } else {
+        len
+    };
+    match records.get(..end) {
+        Some(s) => s,
+        None => records,
+    }
 }
 
 /// Counterfactual fork: return a copy of `records` with the record at `at`
@@ -80,7 +147,9 @@ fn index_in(records: &[CogRecord], at: Offset) -> Option<usize> {
 pub fn cog_fork_swap(records: &[CogRecord], at: Offset, replacement: CogRecord) -> Vec<CogRecord> {
     let mut out = records.to_vec();
     if let Some(i) = index_in(records, at) {
-        out[i] = replacement;
+        if let Some(slot) = out.get_mut(i) {
+            *slot = replacement;
+        }
     }
     out
 }
@@ -94,7 +163,9 @@ pub fn try_cog_fork_swap(
 ) -> Option<Vec<CogRecord>> {
     let i = index_in(records, at)?;
     let mut out = records.to_vec();
-    out[i] = replacement;
+    if let Some(slot) = out.get_mut(i) {
+        *slot = replacement;
+    }
     Some(out)
 }
 
@@ -194,5 +265,24 @@ mod tests {
             "an oversize record is a checked error"
         );
         assert_eq!(decode_turn(&record_turn(5, &r[..2]).unwrap()), recs());
+    }
+
+    #[test]
+    fn decode_turn_advances_frame_by_frame_and_handles_trailing_garbage() {
+        // Two turns back to back decode as one run of records, frame by frame.
+        let mut log = record_turn(5, &recs()).unwrap();
+        log.extend_from_slice(&record_turn(6, &recs()[..1]).unwrap());
+        let mut want = recs();
+        want.push(recs()[0].clone());
+        assert_eq!(decode_turn(&log), want);
+        assert_eq!(decode_turn_strict(&log).unwrap(), want);
+        // A garbage byte after the last frame: lenient keeps the intact prefix,
+        // strict reports it.
+        log.push(0xFF);
+        assert_eq!(decode_turn(&log), want);
+        assert!(decode_turn_strict(&log).is_err());
+        // An empty log is empty under both forms.
+        assert!(decode_turn(&[]).is_empty());
+        assert_eq!(decode_turn_strict(&[]).unwrap(), vec![]);
     }
 }

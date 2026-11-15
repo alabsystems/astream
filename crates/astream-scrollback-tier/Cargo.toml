@@ -1,0 +1,12 @@
+[package]
+name = "astream-scrollback-tier"
+description = "An independent model of a tiered terminal scrollback page-ring allocator, cold run-block frame verifier, 64-bit trigram search bloom filter, logical resize-reflow viewport anchor, `?1049` alternate-screen isolation guard, and OSC 133 output folding; no astream runtime crate and no aterm code calls it. aterm's scrollback is its own `aterm-scrollback`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

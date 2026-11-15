@@ -1,0 +1,11 @@
+[package]
+name = "astream-security-2"
+description = "An independent model of cryptographic transcript binding, capability attenuation ceilings, and sidecar seals (shard 2 of 6, batches 123..124); no astream runtime crate and no aterm code calls it. abrew is aterm's `atpkg` crate, and aterm's install and privacy guards are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

@@ -1,0 +1,12 @@
+[package]
+name = "astream-fabric-mail"
+description = "An independent model of `aterm ctl @self inbox` and `aterm ctl survey` untrusted `PeerData` taint envelopes, bounded survey excerpt rings, monotone inbox ack cursors, prompt-injection fences, `@<sid> result` collectors, and `ctl ls` peer directory; no astream runtime crate and no aterm code calls it. aterm's mail on its bus is `aterm-link`'s, and `survey`, `result` and `ls` are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

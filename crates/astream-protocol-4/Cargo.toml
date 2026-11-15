@@ -1,0 +1,11 @@
+[package]
+name = "astream-protocol-4"
+description = "An independent model of cap revocation, key rotation, HKDF schedules, VT survey/injectivity, and outbox/inbox protocols (shard 4 of 6, batches 31..33); no astream runtime crate and no aterm code calls it. aterm's Autopilot is `aterm-agent`'s harness. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

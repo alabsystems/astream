@@ -1,3 +1,5 @@
+# astream builds on the Trust toolchain (owner directive 2026-09-28). `targo` picks the
+# lane (`--unverified` or `trust`), not this file. There is no stock lane and no hosted CI;
+# the one stock step, `make stock`, only checks that a stock rustc still compiles astream.
 [toolchain]
-channel = "1.95.0"
-components = ["rustfmt", "clippy"]
+channel = "trust"

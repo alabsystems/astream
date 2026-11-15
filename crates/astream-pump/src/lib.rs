@@ -43,17 +43,467 @@
 //! `/out` through it; the designed `/a/state/term/<sid>/screen` snapshot is not
 //! yet published by anything on the bus).
 
+// A contracted fn is written once, through `contract_fn!`: under a Trust compiler
+// (`cfg(clean_islands)`, build.rs) it carries its `ensures` clause, which no stock rustc can
+// parse, and every other compiler gets the plain fn.
+#[macro_use]
+#[path = "../../astream-wire/contract_fn.rs"]
+mod contract_fn;
+
+pub mod nested_drive;
+pub mod semantic_wake;
+pub mod turn_by;
+pub mod wake_dispatch;
+pub use nested_drive::{
+    nested_prompt_bytes_clamp, nested_turn_ready_to_drive, nested_turn_seq_advance,
+    parse_prompt_ready_boffset, NestedTurnState, MAX_NESTED_PROMPT_BYTES,
+};
+#[cfg(unix)]
+pub use wake_dispatch::deliver_hook_unix;
+pub use wake_dispatch::{
+    deliver_hook_tcp, drain_wake_tasks, task_subject, wake_commit_after_ack,
+    wake_dispatch_seq_advance, wake_task_payload_clamp, write_hook_payload, WakeHookFormat,
+    WakeTaskItem, WakeTaskQueue, MAX_WAKE_TASK_PAYLOAD, WAKE_TASK_PREFIX,
+};
+// Plain-Rust twins of the functions this crate's Clean islands compile, for a compiler
+// that cannot lex the islands.
+#[cfg(any(test, not(clean_islands)))]
+mod twins;
+
 use std::io::{self, Read, Write};
 
-use astream_broker::{Client, Subscription};
+pub use astream_broker::Gap;
+use astream_broker::{Client, Event, Subscription};
 use astream_term::events::{EventClassifier, Profile, SessionEvent};
 use astream_term::record::Record;
+
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+mod pump_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::pump_offset_monotone;
+#[cfg(clean_islands)]
+pub use pump_island::pump_offset_monotone;
+
+contract_fn! {
+    /// Verified group-cursor idempotence check linked via `clean-kernel-defeq` to
+    /// `cursor_already_committed_isl`.
+    #[must_use]
+    pub const fn cursor_already_committed(committed: u64, upto: u64) -> bool
+    clauses [ensures result == (upto <= committed)]
+    {
+        upto <= committed
+    }
+}
 
 /// The subject subtree a target session publishes its PTY output to (the lash's
 /// `/out` face). `<sid>` is the session id.
 #[must_use]
 pub fn out_subject(sid: &str) -> String {
     format!("/a/stream/term/{sid}/out")
+}
+
+/// Numeric tag for a [`SessionEvent`] wake boundary:
+/// `1` = `PromptReady`, `2` = `CommandStart`, `3` = `CommandEnd` (no exit code),
+/// `4` = `CommandEnd` (with exit code), `5` = `Quiesced`.
+#[must_use]
+pub const fn wake_kind_tag(ev: &SessionEvent) -> u8 {
+    match ev {
+        SessionEvent::PromptReady { .. } => 1,
+        SessionEvent::CommandStart { .. } => 2,
+        SessionEvent::CommandEnd { exit: None, .. } => 3,
+        SessionEvent::CommandEnd { exit: Some(_), .. } => 4,
+        SessionEvent::Quiesced { .. } => 5,
+    }
+}
+
+/// Encode a compact 13-byte binary wake frame `(kind_tag: u8, boffset: u64, exit_code: i32)`
+/// in little-endian byte order using bitwise shifts.
+#[must_use]
+pub const fn encode_wake_frame(kind_tag: u8, boffset: u64, exit_code: i32) -> [u8; 13] {
+    let e = exit_code as u32;
+    [
+        kind_tag,
+        (boffset & 0xFF) as u8,
+        ((boffset >> 8) & 0xFF) as u8,
+        ((boffset >> 16) & 0xFF) as u8,
+        ((boffset >> 24) & 0xFF) as u8,
+        ((boffset >> 32) & 0xFF) as u8,
+        ((boffset >> 40) & 0xFF) as u8,
+        ((boffset >> 48) & 0xFF) as u8,
+        ((boffset >> 56) & 0xFF) as u8,
+        (e & 0xFF) as u8,
+        ((e >> 8) & 0xFF) as u8,
+        ((e >> 16) & 0xFF) as u8,
+        ((e >> 24) & 0xFF) as u8,
+    ]
+}
+
+/// Decode a compact 13-byte binary wake frame into `(kind_tag, boffset, exit_code)`
+/// using bitwise shifts.
+#[must_use]
+pub const fn decode_wake_frame(b: [u8; 13]) -> (u8, u64, i32) {
+    let boffset = (b[1] as u64)
+        | ((b[2] as u64) << 8)
+        | ((b[3] as u64) << 16)
+        | ((b[4] as u64) << 24)
+        | ((b[5] as u64) << 32)
+        | ((b[6] as u64) << 40)
+        | ((b[7] as u64) << 48)
+        | ((b[8] as u64) << 56);
+    let e = (b[9] as u32) | ((b[10] as u32) << 8) | ((b[11] as u32) << 16) | ((b[12] as u32) << 24);
+    (b[0], boffset, e as i32)
+}
+
+/// Encode a pump's cursor state `(from, last, committed)` into a 25-byte little-endian
+/// record (`flags: u8 | from: u64 | last: u64 | committed: u64`).
+#[must_use]
+pub const fn encode_pump_cursor_state(
+    from: u64,
+    last: Option<u64>,
+    committed: Option<u64>,
+) -> [u8; 25] {
+    let (has_last, last_v) = match last {
+        Some(v) => (1u8, v),
+        None => (0u8, 0u64),
+    };
+    let (has_comm, comm_v) = match committed {
+        Some(v) => (2u8, v),
+        None => (0u8, 0u64),
+    };
+    let fb = from.to_le_bytes();
+    let [l0, l1, l2, l3, l4, l5, l6, l7] = last_v.to_le_bytes();
+    let cb = comm_v.to_le_bytes();
+    [
+        has_last | has_comm,
+        fb[0],
+        fb[1],
+        fb[2],
+        fb[3],
+        fb[4],
+        fb[5],
+        fb[6],
+        fb[7],
+        l0,
+        l1,
+        l2,
+        l3,
+        l4,
+        l5,
+        l6,
+        l7,
+        cb[0],
+        cb[1],
+        cb[2],
+        cb[3],
+        cb[4],
+        cb[5],
+        cb[6],
+        cb[7],
+    ]
+}
+
+/// Decode a 25-byte little-endian pump cursor record into `(from, last, committed)`.
+#[must_use]
+pub const fn decode_pump_cursor_state(b: [u8; 25]) -> Option<(u64, Option<u64>, Option<u64>)> {
+    let [flags, f0, f1, f2, f3, f4, f5, f6, f7, l0, l1, l2, l3, l4, l5, l6, l7, c0, c1, c2, c3, c4, c5, c6, c7] =
+        b;
+    let from = (f0 as u64)
+        | ((f1 as u64) << 8)
+        | ((f2 as u64) << 16)
+        | ((f3 as u64) << 24)
+        | ((f4 as u64) << 32)
+        | ((f5 as u64) << 40)
+        | ((f6 as u64) << 48)
+        | ((f7 as u64) << 56);
+    let last_v = (l0 as u64)
+        | ((l1 as u64) << 8)
+        | ((l2 as u64) << 16)
+        | ((l3 as u64) << 24)
+        | ((l4 as u64) << 32)
+        | ((l5 as u64) << 40)
+        | ((l6 as u64) << 48)
+        | ((l7 as u64) << 56);
+    let comm_v = (c0 as u64)
+        | ((c1 as u64) << 8)
+        | ((c2 as u64) << 16)
+        | ((c3 as u64) << 24)
+        | ((c4 as u64) << 32)
+        | ((c5 as u64) << 40)
+        | ((c6 as u64) << 48)
+        | ((c7 as u64) << 56);
+    if (flags & !0x03) != 0 {
+        return None;
+    }
+    let last = if (flags & 1) != 0 {
+        Some(last_v)
+    } else if last_v == 0 {
+        None
+    } else {
+        return None;
+    };
+    let committed = if (flags & 2) != 0 {
+        Some(comm_v)
+    } else if comm_v == 0 {
+        None
+    } else {
+        return None;
+    };
+    Some((from, last, committed))
+}
+
+/// Four-byte magic prefix (`"APAT"`) for a 20-byte pump attach wire header.
+pub const PUMP_ATTACH_WIRE_MAGIC: [u8; 4] = *b"APAT";
+
+/// Wire format version for pump attach wire headers.
+pub const PUMP_ATTACH_WIRE_VERSION: u8 = 1;
+
+/// Encode a 20-byte pump attach wire header:
+/// `[0..4] = b"APAT"`, `[4] = version (1)`, `[5] = mode_tag` (`0 = from`, `1 = group`),
+/// `[6..8] = cols (BE)`, `[8..10] = rows (BE)`, `[10..12] = subject_len (BE)`,
+/// `[12..20] = from_offset (BE)` (`0` when `mode_tag == 1`).
+#[must_use]
+pub const fn encode_pump_attach_wire(
+    mode_tag: u8,
+    cols: u16,
+    rows: u16,
+    subject_len: u16,
+    from_offset: u64,
+) -> Option<[u8; 20]> {
+    let out = [
+        PUMP_ATTACH_WIRE_MAGIC[0],
+        PUMP_ATTACH_WIRE_MAGIC[1],
+        PUMP_ATTACH_WIRE_MAGIC[2],
+        PUMP_ATTACH_WIRE_MAGIC[3],
+        PUMP_ATTACH_WIRE_VERSION,
+        mode_tag,
+        ((cols >> 8) & 0xFF) as u8,
+        (cols & 0xFF) as u8,
+        ((rows >> 8) & 0xFF) as u8,
+        (rows & 0xFF) as u8,
+        ((subject_len >> 8) & 0xFF) as u8,
+        (subject_len & 0xFF) as u8,
+        ((from_offset >> 56) & 0xFF) as u8,
+        ((from_offset >> 48) & 0xFF) as u8,
+        ((from_offset >> 40) & 0xFF) as u8,
+        ((from_offset >> 32) & 0xFF) as u8,
+        ((from_offset >> 24) & 0xFF) as u8,
+        ((from_offset >> 16) & 0xFF) as u8,
+        ((from_offset >> 8) & 0xFF) as u8,
+        (from_offset & 0xFF) as u8,
+    ];
+    if mode_tag > 1
+        || cols == 0
+        || rows == 0
+        || subject_len == 0
+        || (mode_tag == 1 && from_offset != 0)
+    {
+        return None;
+    }
+    Some(out)
+}
+
+/// Decode a 20-byte pump attach wire header into
+/// `(mode_tag, cols, rows, subject_len, from_offset)`.
+#[must_use]
+pub const fn decode_pump_attach_wire(buf: &[u8]) -> Option<(u8, u16, u16, u16, u64)> {
+    let [b'A', b'P', b'A', b'T', PUMP_ATTACH_WIRE_VERSION, mode_tag, c0, c1, r0, r1, s0, s1, o0, o1, o2, o3, o4, o5, o6, o7, ..] =
+        *buf
+    else {
+        return None;
+    };
+    let cols = ((c0 as u16) << 8) | (c1 as u16);
+    let rows = ((r0 as u16) << 8) | (r1 as u16);
+    let subject_len = ((s0 as u16) << 8) | (s1 as u16);
+    let from_offset = ((o0 as u64) << 56)
+        | ((o1 as u64) << 48)
+        | ((o2 as u64) << 40)
+        | ((o3 as u64) << 32)
+        | ((o4 as u64) << 24)
+        | ((o5 as u64) << 16)
+        | ((o6 as u64) << 8)
+        | (o7 as u64);
+    if mode_tag > 1
+        || cols == 0
+        || rows == 0
+        || subject_len == 0
+        || (mode_tag == 1 && from_offset != 0)
+    {
+        return None;
+    }
+    Some((mode_tag, cols, rows, subject_len, from_offset))
+}
+
+/// Four-byte magic prefix (`"APQS"`) for a 20-byte pump quiesce state wire header.
+pub const PUMP_QUIESCE_WIRE_MAGIC: [u8; 4] = *b"APQS";
+
+/// Wire format version for pump quiesce state wire headers.
+pub const PUMP_QUIESCE_WIRE_VERSION: u8 = 1;
+
+/// Encode a 20-byte pump quiesce state wire header:
+/// `[0..4] = b"APQS"`, `[4] = version (1)`, `[5] = settled (0/1)`, `[6..8] = 0`,
+/// `[8..12] = debounce_ms (BE)`, `[12..20] = last_boffset (BE)`.
+#[must_use]
+pub const fn encode_pump_quiesce_wire(
+    settled: bool,
+    debounce_ms: u32,
+    last_boffset: u64,
+) -> Option<[u8; 20]> {
+    let settled_tag = settled as u8;
+    let out = [
+        PUMP_QUIESCE_WIRE_MAGIC[0],
+        PUMP_QUIESCE_WIRE_MAGIC[1],
+        PUMP_QUIESCE_WIRE_MAGIC[2],
+        PUMP_QUIESCE_WIRE_MAGIC[3],
+        PUMP_QUIESCE_WIRE_VERSION,
+        settled_tag,
+        0,
+        0,
+        ((debounce_ms >> 24) & 0xFF) as u8,
+        ((debounce_ms >> 16) & 0xFF) as u8,
+        ((debounce_ms >> 8) & 0xFF) as u8,
+        (debounce_ms & 0xFF) as u8,
+        ((last_boffset >> 56) & 0xFF) as u8,
+        ((last_boffset >> 48) & 0xFF) as u8,
+        ((last_boffset >> 40) & 0xFF) as u8,
+        ((last_boffset >> 32) & 0xFF) as u8,
+        ((last_boffset >> 24) & 0xFF) as u8,
+        ((last_boffset >> 16) & 0xFF) as u8,
+        ((last_boffset >> 8) & 0xFF) as u8,
+        (last_boffset & 0xFF) as u8,
+    ];
+    if debounce_ms == 0 {
+        return None;
+    }
+    Some(out)
+}
+
+/// Decode a 20-byte pump quiesce state wire header into `(settled, debounce_ms, last_boffset)`.
+#[must_use]
+pub const fn decode_pump_quiesce_wire(buf: &[u8]) -> Option<(bool, u32, u64)> {
+    let [b'A', b'P', b'Q', b'S', PUMP_QUIESCE_WIRE_VERSION, settled_tag, 0, 0, d0, d1, d2, d3, l0, l1, l2, l3, l4, l5, l6, l7, ..] =
+        *buf
+    else {
+        return None;
+    };
+    let debounce_ms = ((d0 as u32) << 24) | ((d1 as u32) << 16) | ((d2 as u32) << 8) | (d3 as u32);
+    let last_boffset = ((l0 as u64) << 56)
+        | ((l1 as u64) << 48)
+        | ((l2 as u64) << 40)
+        | ((l3 as u64) << 32)
+        | ((l4 as u64) << 24)
+        | ((l5 as u64) << 16)
+        | ((l6 as u64) << 8)
+        | (l7 as u64);
+    let settled = match settled_tag {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
+    if debounce_ms == 0 {
+        return None;
+    }
+    Some((settled, debounce_ms, last_boffset))
+}
+
+/// Four-byte magic prefix (`"APGP"`) for a 30-byte pump retention gap wire header.
+pub const PUMP_GAP_WIRE_MAGIC: [u8; 4] = *b"APGP";
+
+/// Wire format version for pump retention gap wire headers.
+pub const PUMP_GAP_WIRE_VERSION: u8 = 1;
+
+/// Encode a 30-byte pump retention gap wire header:
+/// `[0..4] = b"APGP"`, `[4] = version (1)`, `[5] = has_records (0/1)`,
+/// `[6..14] = from (BE)`, `[14..22] = to (BE)`, `[22..30] = records_or_zero (BE)`.
+/// Returns `None` if `gap.from >= gap.to`.
+#[must_use]
+pub const fn encode_pump_gap_wire(gap: Gap) -> Option<[u8; 30]> {
+    let from = gap.from;
+    let to = gap.to;
+    let (has_rec, rec_v) = match gap.records {
+        Some(r) => (1u8, r),
+        None => (0u8, 0u64),
+    };
+    let out = [
+        PUMP_GAP_WIRE_MAGIC[0],
+        PUMP_GAP_WIRE_MAGIC[1],
+        PUMP_GAP_WIRE_MAGIC[2],
+        PUMP_GAP_WIRE_MAGIC[3],
+        PUMP_GAP_WIRE_VERSION,
+        has_rec,
+        ((from >> 56) & 0xFF) as u8,
+        ((from >> 48) & 0xFF) as u8,
+        ((from >> 40) & 0xFF) as u8,
+        ((from >> 32) & 0xFF) as u8,
+        ((from >> 24) & 0xFF) as u8,
+        ((from >> 16) & 0xFF) as u8,
+        ((from >> 8) & 0xFF) as u8,
+        (from & 0xFF) as u8,
+        ((to >> 56) & 0xFF) as u8,
+        ((to >> 48) & 0xFF) as u8,
+        ((to >> 40) & 0xFF) as u8,
+        ((to >> 32) & 0xFF) as u8,
+        ((to >> 24) & 0xFF) as u8,
+        ((to >> 16) & 0xFF) as u8,
+        ((to >> 8) & 0xFF) as u8,
+        (to & 0xFF) as u8,
+        ((rec_v >> 56) & 0xFF) as u8,
+        ((rec_v >> 48) & 0xFF) as u8,
+        ((rec_v >> 40) & 0xFF) as u8,
+        ((rec_v >> 32) & 0xFF) as u8,
+        ((rec_v >> 24) & 0xFF) as u8,
+        ((rec_v >> 16) & 0xFF) as u8,
+        ((rec_v >> 8) & 0xFF) as u8,
+        (rec_v & 0xFF) as u8,
+    ];
+    if from >= to {
+        return None;
+    }
+    Some(out)
+}
+
+/// Decode a 30-byte pump retention gap wire header into a [`Gap`].
+#[must_use]
+pub const fn decode_pump_gap_wire(buf: &[u8]) -> Option<Gap> {
+    let [b'A', b'P', b'G', b'P', PUMP_GAP_WIRE_VERSION, has_rec, f0, f1, f2, f3, f4, f5, f6, f7, t0, t1, t2, t3, t4, t5, t6, t7, r0, r1, r2, r3, r4, r5, r6, r7, ..] =
+        *buf
+    else {
+        return None;
+    };
+    let from = ((f0 as u64) << 56)
+        | ((f1 as u64) << 48)
+        | ((f2 as u64) << 40)
+        | ((f3 as u64) << 32)
+        | ((f4 as u64) << 24)
+        | ((f5 as u64) << 16)
+        | ((f6 as u64) << 8)
+        | (f7 as u64);
+    let to = ((t0 as u64) << 56)
+        | ((t1 as u64) << 48)
+        | ((t2 as u64) << 40)
+        | ((t3 as u64) << 32)
+        | ((t4 as u64) << 24)
+        | ((t5 as u64) << 16)
+        | ((t6 as u64) << 8)
+        | (t7 as u64);
+    let rec_v = ((r0 as u64) << 56)
+        | ((r1 as u64) << 48)
+        | ((r2 as u64) << 40)
+        | ((r3 as u64) << 32)
+        | ((r4 as u64) << 24)
+        | ((r5 as u64) << 16)
+        | ((r6 as u64) << 8)
+        | (r7 as u64);
+    let records = match has_rec {
+        0 if rec_v == 0 => None,
+        1 => Some(rec_v),
+        _ => return None,
+    };
+    if from >= to {
+        return None;
+    }
+    Some(Gap { from, to, records })
 }
 
 /// The one-line rendering of a wake — `<KIND> boffset=<broker-offset> [exit=E]`
@@ -74,6 +524,80 @@ pub fn wake_line(ev: &SessionEvent, boffset: u64) -> String {
         },
         SessionEvent::Quiesced { .. } => format!("QUIESCED boffset={boffset}"),
     }
+}
+
+const fn is_meta_token_safe(b: u8) -> bool {
+    matches!(
+        b,
+        b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'~' | b'/' | b'-' | b':'
+    )
+}
+
+const fn hex_upper_char(nibble: u8) -> char {
+    match nibble & 0x0F {
+        0 => '0',
+        1 => '1',
+        2 => '2',
+        3 => '3',
+        4 => '4',
+        5 => '5',
+        6 => '6',
+        7 => '7',
+        8 => '8',
+        9 => '9',
+        10 => 'A',
+        11 => 'B',
+        12 => 'C',
+        13 => 'D',
+        14 => 'E',
+        _ => 'F',
+    }
+}
+
+fn push_percent_encoded_token(out: &mut String, s: &str) {
+    for &b in s.as_bytes() {
+        if is_meta_token_safe(b) {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(hex_upper_char(b >> 4));
+            out.push(hex_upper_char(b));
+        }
+    }
+}
+
+/// Render [`wake_line`] plus optional percent-encoded `cwd=<path>` and `title=<title>`
+/// tokens (used by `aspump --meta`). Safe path characters (`A-Za-z0-9._~/-:`) appear
+/// verbatim; whitespace, `=`, `%`, and non-ASCII bytes are `%XX`-encoded so every field
+/// remains a single unambiguous whitespace-delimited token.
+#[must_use]
+pub fn wake_line_with_meta(ev: &SessionEvent, boffset: u64, cwd: &str, title: &str) -> String {
+    let mut line = wake_line(ev, boffset);
+    if !cwd.is_empty() {
+        line.push_str(" cwd=");
+        push_percent_encoded_token(&mut line, cwd);
+    }
+    if !title.is_empty() {
+        line.push_str(" title=");
+        push_percent_encoded_token(&mut line, title);
+    }
+    line
+}
+
+/// The one-line stderr diagnostic for a retention gap (`REQUIREMENTS-fabric-operations`
+/// R4, addendum A9) — `aspump: GAP from=<F> to=<T> records=<N|unknown>` — matching
+/// `asb: sub: GAP …`. Never written to stdout, whose framing a wake consumer parses line
+/// by line.
+#[must_use]
+pub fn gap_line(gap: &Gap) -> String {
+    let records = match gap.records {
+        Some(n) => n.to_string(),
+        None => "unknown".to_string(),
+    };
+    format!(
+        "aspump: GAP from={} to={} records={records}",
+        gap.from, gap.to
+    )
 }
 
 // The durable half of a group attach. `SubscribeGroup` consumes its connection
@@ -214,13 +738,59 @@ impl<S: Read + Write> Pump<S> {
     /// Propagates the broker's delivery I/O error — including a broker-side
     /// rejection of the subscription, which arrives as the first result.
     pub fn next_wake(&mut self) -> io::Result<Option<Vec<SessionEvent>>> {
-        match self.sub.recv()? {
-            Some((offset, _subject, body)) => {
-                self.last = Some(offset);
-                Ok(Some(self.classifier.push(&Record::Out(body))))
+        loop {
+            match self.sub.recv_event()? {
+                None => return Ok(None),
+                Some(Event::Mark { .. }) => continue,
+                Some(Event::Gap(_)) => {
+                    self.classifier.reset_escape();
+                }
+                Some(Event::Delivery { offset, body, .. }) => {
+                    let next_last = match self.last {
+                        Some(prev) => pump_offset_monotone(prev, offset),
+                        None => offset,
+                    };
+                    self.last = Some(next_last);
+                    return Ok(Some(self.classifier.push(&Record::Out(body))));
+                }
             }
-            None => Ok(None),
         }
+    }
+
+    /// Every retention gap notice this pump's subscription carried since the last call
+    /// ([`Gap::and`]): what retention gave up below the tail
+    /// (`REQUIREMENTS-fabric-operations` R4, addendum A9). [`Pump::next_wake`]
+    /// automatically resets any mid-sequence VT/OSC parser state across each gap so a
+    /// torn pre-gap escape cannot forge a wake or swallow post-gap prompt glyphs; callers
+    /// read this method to observe that records in `from..to` were skipped. `None` when
+    /// none came.
+    pub fn take_gap(&mut self) -> Option<Gap> {
+        self.sub.take_gap()
+    }
+
+    /// Borrow the folded [`astream_term::Screen`] accumulated across deliveries on this pump.
+    #[must_use]
+    pub const fn screen(&self) -> &astream_term::Screen {
+        self.classifier.screen()
+    }
+
+    /// Current sanitized window title (`OSC 0` / `OSC 2`) observed on this session's `/out`.
+    #[must_use]
+    pub fn title(&self) -> &str {
+        self.classifier.title()
+    }
+
+    /// Current decoded working directory (`OSC 7`) observed on this session's `/out`.
+    #[must_use]
+    pub fn cwd(&self) -> &str {
+        self.classifier.cwd()
+    }
+
+    /// Whether the target session is currently mid-frame inside DEC `?2026` synchronized
+    /// output (within the [`astream_term::MAX_SYNC_OUTPUT_BYTES`] safety budget).
+    #[must_use]
+    pub const fn in_sync_update(&self) -> bool {
+        self.classifier.in_sync_update()
     }
 
     /// Signal that the debounce window elapsed with no new output: emit the
@@ -228,6 +798,13 @@ impl<S: Read + Write> Pump<S> {
     /// target has shown no shell integration).
     pub fn quiesce(&mut self) -> Vec<SessionEvent> {
         self.classifier.quiesce()
+    }
+
+    /// Settle the screen only when the target is **not** inside an active DEC `?2026`
+    /// synchronized-output frame (`None` while latched, `Some(wakes)` once committed
+    /// or auto-unlatched).
+    pub fn quiesce_if_unsynced(&mut self) -> Option<Vec<SessionEvent>> {
+        self.classifier.quiesce_if_unsynced()
     }
 
     /// Durably advance this pump's group cursor **through** [`Pump::offset`] —
@@ -267,21 +844,30 @@ impl<S: Read + Write> Pump<S> {
         let Some(upto) = last else {
             return Ok(None);
         };
-        if cursor.committed == Some(upto) {
-            // Nothing delivered since the last commit: the group is already there,
-            // and committing again would only append a redundant commit record.
-            return Ok(Some(upto));
+        if let Some(c) = cursor.committed {
+            if cursor_already_committed(c, upto) {
+                // Nothing delivered since the last commit: the group is already there,
+                // and committing again would only append a redundant commit record.
+                return Ok(Some(upto));
+            }
         }
-        cursor.commits.commit(&cursor.group, upto)?;
-        cursor.committed = Some(upto);
-        Ok(Some(upto))
+        let next_committed = match cursor.committed {
+            Some(prev) => pump_offset_monotone(prev, upto),
+            None => upto,
+        };
+        cursor.commits.commit(&cursor.group, next_committed)?;
+        cursor.committed = Some(next_committed);
+        Ok(Some(next_committed))
     }
 
     /// The consumer group this pump's durable cursor lives under, or `None` for
     /// the client-held-offset form.
     #[must_use]
     pub fn group(&self) -> Option<&str> {
-        self.cursor.as_ref().map(|c| c.group.as_str())
+        match &self.cursor {
+            Some(c) => Some(c.group.as_str()),
+            None => None,
+        }
     }
 
     /// The offset this pump has durably committed **through**, or `None` if it
@@ -289,7 +875,10 @@ impl<S: Read + Write> Pump<S> {
     /// pump's own record of its commits, not a query of the broker's cursor.
     #[must_use]
     pub fn committed(&self) -> Option<u64> {
-        self.cursor.as_ref().and_then(|c| c.committed)
+        match &self.cursor {
+            Some(c) => c.committed,
+            None => None,
+        }
     }
 
     /// The broker offset of the most recent delivery — where a woken agent reads
@@ -298,8 +887,11 @@ impl<S: Read + Write> Pump<S> {
     /// the start is the broker's to know, it is `0` as a placeholder — never read
     /// it as the group's committed cursor.
     #[must_use]
-    pub fn offset(&self) -> u64 {
-        self.last.unwrap_or(self.from)
+    pub const fn offset(&self) -> u64 {
+        match self.last {
+            Some(o) => o,
+            None => self.from,
+        }
     }
 
     /// The offset a restarted pump attaches from to continue this stream with no
@@ -308,7 +900,55 @@ impl<S: Read + Write> Pump<S> {
     /// same `0` placeholder as [`Pump::offset`]). It is also exactly the offset a
     /// group resumes at once [`Pump::commit`] has run.
     #[must_use]
-    pub fn next_offset(&self) -> u64 {
-        self.last.map_or(self.from, |o| o.saturating_add(1))
+    pub const fn next_offset(&self) -> u64 {
+        match self.last {
+            Some(o) => o.saturating_add(1),
+            None => self.from,
+        }
+    }
+}
+
+#[cfg(test)]
+mod codec_tests {
+    use super::*;
+
+    #[test]
+    fn wake_frame_and_cursor_state_roundtrip() {
+        let ev = SessionEvent::PromptReady { offset: 3 };
+        let tag = wake_kind_tag(&ev);
+        assert_eq!(tag, 1);
+        let frame = encode_wake_frame(tag, 0x0102_0304_0506_0708, -42);
+        assert_eq!(decode_wake_frame(frame), (1, 0x0102_0304_0506_0708, -42));
+
+        let c_enc = encode_pump_cursor_state(10, Some(25), Some(20));
+        assert_eq!(
+            decode_pump_cursor_state(c_enc),
+            Some((10, Some(25), Some(20)))
+        );
+        let c_none = encode_pump_cursor_state(7, None, None);
+        assert_eq!(decode_pump_cursor_state(c_none), Some((7, None, None)));
+
+        let gap = Gap {
+            from: 12,
+            to: 48,
+            records: Some(36),
+        };
+        let g_enc = encode_pump_gap_wire(gap).expect("ordered gap encodes");
+        assert_eq!(decode_pump_gap_wire(&g_enc), Some(gap));
+        let gap_none = Gap {
+            from: 12,
+            to: 48,
+            records: None,
+        };
+        let gn_enc = encode_pump_gap_wire(gap_none).expect("uncounted gap encodes");
+        assert_eq!(decode_pump_gap_wire(&gn_enc), Some(gap_none));
+        assert_eq!(
+            encode_pump_gap_wire(Gap {
+                from: 48,
+                to: 48,
+                records: Some(1),
+            }),
+            None
+        );
     }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "astream-protocol-5"
+description = "An independent model of cap revocation, key rotation, HKDF schedules, VT survey/injectivity, and outbox/inbox protocols (shard 5 of 6, batches 33..35); no astream runtime crate and no aterm code calls it. aterm's `syspolicyd` guard is aterm's own code, and abrew is its `atpkg` crate. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-term = { workspace = true }

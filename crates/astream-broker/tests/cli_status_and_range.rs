@@ -1,5 +1,5 @@
 //! Regressions on the `asb` shell face: the two ways a verb LIED about what
-//! it had done, and the sentences that said the opposite of the code.
+//! it had done, and the one ack key it shares with the library.
 //!
 //! * A stdout write error made `pub`, `ack`, `commit`, `mint` and `repair` PANIC —
 //!   exit 101 with a Rust backtrace — where every read verb surfaced the same
@@ -12,20 +12,21 @@
 //!   check at all. A consumer group's committed offset is monotone by design and no
 //!   verb lowers it, so `asb commit <ep> G 999999` exited 0 and durably skipped G
 //!   past every record it had not read, with no recovery but a new group name.
-//! * The `ack` arm's comment claimed `astream_broker::ack` still keys on the BARE
-//!   input offset — the divergence the shared `ACK_SEQ_BASE` key closed, contradicted by this same
-//!   file's module header, by `client.rs`, and by the claim built on their
-//!   agreement. `last`'s face promised `--max` was the ONLY bound on its answer when
-//!   the head pin silently omits a superseded subject and asb makes no paired read.
+//! * `asb ack` and `astream_broker::ack` must key an ack the same way (`ACK_SEQ_BASE |
+//!   offset`), or a retry that crosses faces appends a second answer: an ack the
+//!   library sent is a dup when `asb` sends it again.
 //!
 //! No sleeps. The dead-stdout cases close the pipe's READ end BEFORE the child is
-//! spawned, so the write cannot race the close; everything else synchronizes on the
-//! serve readiness line and on records the log already holds.
+//! spawned, so the write cannot race the close, and every spawn in this binary is
+//! serialized with the making of that pipe ([`spawn`]), so no other child holds its
+//! read end; everything else synchronizes on the serve readiness line and on records
+//! the log already holds.
 #![cfg(unix)]
 
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Mutex, PoisonError};
 
 static CTR: AtomicU64 = AtomicU64::new(0);
 
@@ -73,6 +74,25 @@ fn asb() -> Command {
     Command::new(env!("CARGO_BIN_EXE_asb"))
 }
 
+/// Held across every spawn in this binary and across the making of [`dead`]'s pipe.
+///
+/// The tests run on parallel threads, and on macOS std makes a pipe with `pipe()` and
+/// only then sets `FD_CLOEXEC` on each end (there is no `pipe2`). A child another
+/// thread spawns between the two inherits both ends and keeps them for its life — a
+/// sibling's `asb serve` keeps them until its test ends. A `dead()` read end held by
+/// such a child is a reader: the write the case expects to fail lands, and the verb
+/// exits 0 (4 runs in 1500, eight copies of this binary at once, before this lock;
+/// none after). One lock over both is the whole fix: a pipe made under it is
+/// close-on-exec before any child is spawned, and every child this binary spawns has
+/// exec'd when its spawn returns.
+static SPAWN: Mutex<()> = Mutex::new(());
+
+/// Spawn `cmd` under [`SPAWN`]. Every child in this binary starts here.
+fn spawn(cmd: &mut Command) -> Child {
+    let _serial = SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+    cmd.spawn().unwrap()
+}
+
 fn stdout(o: &Output) -> String {
     String::from_utf8_lossy(&o.stdout).into_owned()
 }
@@ -93,11 +113,11 @@ impl Drop for Serve {
 
 /// `asb serve`, synchronized on its readiness line (data, not a sleep).
 fn serve(p: &Paths) -> Serve {
-    let mut serve = asb()
-        .args(["serve", &p.sock, &p.log])
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut serve = spawn(
+        asb()
+            .args(["serve", &p.sock, &p.log])
+            .stdout(Stdio::piped()),
+    );
     let mut r = BufReader::new(serve.stdout.take().unwrap());
     let mut line = String::new();
     r.read_line(&mut line).unwrap();
@@ -105,18 +125,28 @@ fn serve(p: &Paths) -> Serve {
     Serve(serve)
 }
 
+/// `Command::output`'s shape — stdin empty, stdout and stderr captured — spawned
+/// under [`SPAWN`].
 fn run(args: &[&str]) -> Output {
-    asb().args(args).output().unwrap()
+    spawn(
+        asb()
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    )
+    .wait_with_output()
+    .unwrap()
 }
 
 fn publish(sock: &str, subject: &str, seq: &str, body: &[u8]) -> Output {
-    let mut c = asb()
-        .args(["pub", sock, subject, "--id", "7", "--seq", seq])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut c = spawn(
+        asb()
+            .args(["pub", sock, subject, "--id", "7", "--seq", seq])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
     c.stdin.take().unwrap().write_all(body).unwrap();
     c.wait_with_output().unwrap()
 }
@@ -145,9 +175,14 @@ fn head(sock: &str) -> u64 {
 ///
 /// This is the determinism the house rules ask for: the reader is dropped BEFORE
 /// `spawn`, so there is no window in which the child could write successfully and no
-/// sleep anywhere. (`std::io::pipe` is std — no dependency, no `unsafe`.)
+/// sleep anywhere. The pipe is made under [`SPAWN`], so no child another test spawns
+/// can inherit its read end before it is close-on-exec. (`std::io::pipe` is std — no
+/// dependency, no `unsafe`.)
 fn dead() -> Stdio {
-    let (r, w) = std::io::pipe().expect("pipe");
+    let (r, w) = {
+        let _serial = SPAWN.lock().unwrap_or_else(PoisonError::into_inner);
+        std::io::pipe().expect("pipe")
+    };
     drop(r);
     Stdio::from(w)
 }
@@ -155,13 +190,13 @@ fn dead() -> Stdio {
 /// Run `asb` with a stdout nothing is reading. `stdin_bytes` feeds the verbs that
 /// read a body; stderr is captured so the assertion can name what came out.
 fn run_dead_stdout(args: &[&str], stdin_bytes: &[u8]) -> Output {
-    let mut c = asb()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(dead())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut c = spawn(
+        asb()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(dead())
+            .stderr(Stdio::piped()),
+    );
     c.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
     c.wait_with_output().unwrap()
 }
@@ -169,13 +204,13 @@ fn run_dead_stdout(args: &[&str], stdin_bytes: &[u8]) -> Output {
 /// The same, with NEITHER stream readable — the shape `asb ... 2>&1 | head -0` and a
 /// supervisor that closes both pipes produce.
 fn run_dead_both(args: &[&str], stdin_bytes: &[u8]) -> Output {
-    let mut c = asb()
-        .args(args)
-        .stdin(Stdio::piped())
-        .stdout(dead())
-        .stderr(dead())
-        .spawn()
-        .unwrap();
+    let mut c = spawn(
+        asb()
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(dead())
+            .stderr(dead()),
+    );
     c.stdin.take().unwrap().write_all(stdin_bytes).unwrap();
     c.wait_with_output().unwrap()
 }
@@ -491,13 +526,13 @@ fn the_head_probe_is_authorized_by_the_same_grant_the_operation_is() {
     let group = format!("/f/F/{node}/cur/inbox");
 
     // One ask on the node's own lane, published under the bound grant.
-    let mut c = asb()
-        .args(["pub", &p.sock, &inbox, "--seq", "1", "--cap-file", &ring])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut c = spawn(
+        asb()
+            .args(["pub", &p.sock, &inbox, "--seq", "1", "--cap-file", &ring])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped()),
+    );
     c.stdin.take().unwrap().write_all(b"v=1 ask").unwrap();
     let out = c.wait_with_output().unwrap();
     let line = stdout(&out);
@@ -534,63 +569,99 @@ fn the_head_probe_is_authorized_by_the_same_grant_the_operation_is() {
     );
 }
 
-/// THE HONESTY GATE, on two sentences that once said the opposite of the code.
-///
-/// Both are first-rank defects here, not typos: one told a maintainer that the two
-/// faces of a DURABLE dedup key still disagree (they share one derivation, and a
-/// third face written to match the comment would silently double every ack that
-/// crossed it), and one told an operator that `--max` was the only thing that could
-/// shorten a `last` answer, when a subject superseded past a request's pinned head is
-/// omitted from that page and `asb last` makes no paired read to fill it in.
-///
-/// A comment cannot be exercised, so it is asserted where it lives. The derivation
-/// half is checked against `client.rs` in the same breath, so this fails if either
-/// face moves away from the shared constant.
+/// AN ACK IS ONE DEDUP KEY ON BOTH FACES. `astream_broker::ack` and `asb ack` derive
+/// an ack's producer sequence from the one exported `ACK_SEQ_BASE`, so an ack the
+/// library sent and `asb` retries (the same producer id, the same input offset) is
+/// deduped to the library's record: one answer on the log. An `asb` that keyed the
+/// ack on the bare offset again would append its retry as a second answer.
 #[test]
-fn the_asb_face_never_states_the_opposite_of_the_code_it_annotates() {
-    let asb = include_str!("../src/bin/asb.rs");
-    let client = include_str!("../src/client.rs");
+fn an_ack_the_library_sent_is_a_dup_when_asb_retries_it() {
+    let p = fresh("crossack");
+    let _s = serve(&p);
+    let group = "/f/F/cur/n-a1/inbox";
+    let back = "/f/F/in/p/h-andrew/n-a1/ack";
+    let asked = publish(&p.sock, "/f/F/in/n-a1/s-1/h-andrew/ask", "1", b"which?");
+    assert_eq!(stdout(&asked), "0 new\n", "{}", stderr(&asked));
 
-    // ONE derivation, from ONE exported constant, on both faces.
-    assert!(
-        client.contains("ACK_SEQ_BASE | offset"),
-        "the library helper must still derive the ack key from ACK_SEQ_BASE"
+    let mut c = astream_broker::Client::connect(&p.sock).unwrap();
+    assert_eq!(
+        astream_broker::ack(&mut c, 77, group, 0, back, b"handled").unwrap(),
+        (1, false),
+        "the library's ack is the record at offset 1"
     );
-    assert!(
-        asb.contains("ACK_SEQ_BASE | offset"),
-        "asb must still derive the ack key from the SAME exported constant"
-    );
-    assert!(
-        !asb.contains("keys on the BARE input offset"),
-        "asb still tells a reader that `astream_broker::ack` keys on the bare offset — \
-         it derives from ACK_SEQ_BASE (client.rs), and this file's own module \
-         header says so twenty lines above the call site"
-    );
-    assert!(
-        asb.contains("broker.ack-key-is-one-wire-contract"),
-        "the ack site should point at the claim that pins the agreement"
-    );
+    drop(c);
 
-    // `last`'s completeness contract is `--max` PLUS a paired read, never `--max`.
-    for stale in [
-        "`--max` is the only bound on the answer",
-        "--max is its only bound",
-        "`--max` is the ONLY\n/// limit",
-        "a contract with no hidden bound in it",
+    let out = run(&["ack", &p.sock, group, "0", back, "handled", "--id", "77"]);
+    assert_eq!(out.status.code(), Some(0), "{}", stderr(&out));
+    assert_eq!(
+        stdout(&out),
+        "1 dup\n",
+        "asb's retry of that ack appends nothing"
+    );
+    assert_eq!(head(&p.sock), 2, "one ask and one answer");
+}
+
+// Information queries are usable by a person or a package startup probe without
+// an endpoint, secret, broker, or configuration file.
+#[test]
+fn information_flags_write_successfully_to_stdout() {
+    let help = run(&["--help"]);
+    assert_eq!(help.status.code(), Some(0), "{}", stderr(&help));
+    assert!(help.stderr.is_empty());
+    assert!(stdout(&help).starts_with("usage: asb "));
+    assert!(stdout(&help).contains("asb serve"));
+    assert!(stdout(&help).contains("--version"));
+    let version = run(&["--version"]);
+    assert_eq!(version.status.code(), Some(0), "{}", stderr(&version));
+    assert!(version.stderr.is_empty());
+    assert_eq!(
+        stdout(&version),
+        concat!("asb ", env!("CARGO_PKG_VERSION"), "\n")
+    );
+}
+
+#[test]
+fn information_flags_do_not_override_invalid_commands() {
+    for args in [
+        vec!["--help", "--version"],
+        vec!["--version", "--help"],
+        vec!["--", "--help"],
+        vec!["--help", "serve"],
+        vec!["serve", "/absent-asb-info.sock", "--help"],
+        vec!["--version=unexpected"],
     ] {
-        assert!(
-            !asb.contains(stale),
-            "asb still promises {stale:?}: the head pin omits a subject superseded past \
-             it, and `asb last` performs no paired `sub --from <next>` to fill it in"
+        let output = run(&args);
+        assert_eq!(
+            output.status.code(),
+            Some(2),
+            "{args:?}: {}",
+            stderr(&output)
         );
+        assert!(output.stdout.is_empty(), "{args:?}");
+        assert!(!output.stderr.is_empty(), "{args:?}");
     }
-    assert!(
-        asb.contains("OMITTED"),
-        "the asb face must say that a superseded subject is omitted from its page"
-    );
-    assert!(
-        asb.contains("UNION of per-request snapshots"),
-        "the asb face must say the printed answer is a union of per-request snapshots \
-         reported under the FIRST request's head"
-    );
+    use std::os::unix::ffi::OsStringExt;
+    for flag in ["--help", "--version"] {
+        let output = spawn(
+            asb()
+                .arg(flag)
+                .arg(std::ffi::OsString::from_vec(vec![0xff]))
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped()),
+        )
+        .wait_with_output()
+        .unwrap();
+        assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+        assert!(output.stdout.is_empty());
+        assert!(stderr(&output).contains("not valid UTF-8"));
+    }
+}
+
+#[test]
+fn information_stdout_failure_is_runtime_error_not_a_panic() {
+    for flag in ["--help", "--version"] {
+        let output = run_dead_stdout(&[flag], b"");
+        assert_eq!(output.status.code(), Some(1), "{flag}: {}", stderr(&output));
+        assert!(!stderr(&output).contains("panicked"));
+    }
 }

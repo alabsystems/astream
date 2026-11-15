@@ -5,7 +5,7 @@
 //! after the fsync that covers it). Contrast `broker_microbench` (1 producer, 1 fsync
 //! per message): same durability, the difference is purely batched fsync.
 //!
-//!   PRODUCERS=64 BENCH_N=2000 cargo run --release -p astream-broker --example broker_groupcommit_bench
+//!   PRODUCERS=64 BENCH_N=2000 targo --unverified run --release -p astream-broker --example broker_groupcommit_bench
 
 #[cfg(unix)]
 use astream_broker::{Broker, Client};

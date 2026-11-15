@@ -1,0 +1,14 @@
+[package]
+name = "astream-sys"
+description = "astream's OS cordon: an ordering-only flush (`barrier_sync`, F_BARRIERFSYNC on Apple), the kernel's boot session id (`boot_session`), sockets kept out of children (`close_on_fork`), and the owner-only file rule (`open_nonblocking`, `owner_private`: a regular file of this user's, no group or other bit, no macOS ACL allow entry; `owner_private_dir_by_path`: a directory's verdict from one `lstatx_np` of its path on macOS arm64, through the same clauses). Zero dependencies; the only unsafe is two cordoned modules of hand-declared FFI calls (cfg(target_vendor = \"apple\") and cfg(unix)), compiler-enforced by deny(unsafe_code) at the root."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+# Zero dependencies, by design: no libc. The two Apple calls (`fcntl`,
+# `sysctlbyname`) are declared by hand inside the cordoned `apple` module, so the
+# broker that depends on this crate still pulls no third-party code.
+[dependencies]

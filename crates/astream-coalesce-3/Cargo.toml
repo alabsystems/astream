@@ -1,0 +1,11 @@
+[package]
+name = "astream-coalesce-3"
+description = "An independent model of Macaroon discharge, Last radix cursors, SIGMA identity binding, damage coalescing, and restart fences (shard 3 of 6, batches 53..54); no astream runtime crate and no aterm code calls it. aterm's Autopilot is `aterm-agent`'s harness, and its `syspolicyd` guard is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

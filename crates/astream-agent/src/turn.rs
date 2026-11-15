@@ -10,6 +10,27 @@ use crate::cog::{CogRecord, StopReason};
 use astream_term::{screen, Record, Screen};
 use astream_wire::fnv1a_64;
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "turn_island.rs"]
+mod turn_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::turn_step_advance;
+#[cfg(clean_islands)]
+pub use turn_island::turn_step_advance;
+
+contract_fn! {
+    /// Verified check that an encoded action tag represents [`Action::Finish`] (`action_tag == 2`),
+    /// linked via `clean-kernel-defeq` to `turn_action_is_finish_isl`.
+    #[must_use]
+    pub const fn turn_action_is_finish(action_tag: u8) -> bool
+    clauses [ensures result == (action_tag == 2)]
+    {
+        action_tag == 2
+    }
+}
+
 /// What the policy decided to do at one step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Action {
@@ -19,6 +40,24 @@ pub enum Action {
     CallTool,
     /// End the turn — later records are not reached.
     Finish,
+}
+
+impl Action {
+    /// Wire tag for this action in [`trace_bytes`].
+    #[must_use]
+    pub const fn tag(self) -> u8 {
+        match self {
+            Action::Speak => 0,
+            Action::CallTool => 1,
+            Action::Finish => 2,
+        }
+    }
+
+    /// Whether this action ends the turn.
+    #[must_use]
+    pub const fn is_finish(self) -> bool {
+        matches!(self, Action::Finish)
+    }
 }
 
 /// One step of the decision trace.
@@ -82,38 +121,101 @@ pub fn run_turn<P: Planner>(
 ) -> (Vec<Decision>, Screen) {
     let mut decisions = Vec::new();
     let mut painted: Vec<u8> = Vec::new();
-    for (i, record) in records.iter().enumerate() {
-        let action = planner.decide(i as u32, record);
-        decisions.push(Decision {
-            step: i as u32,
-            action,
-        });
+    let mut cur_step = 0u64;
+    let mut rest = records;
+    let mut i = 0u64;
+    while let [record, tail @ ..] = rest {
+        cur_step = turn_step_advance(cur_step, i);
+        let step = cur_step as u32;
+        let action = planner.decide(step, record);
+        decisions.push(Decision { step, action });
         painted.extend_from_slice(record.display());
         painted.extend_from_slice(b"\r\n");
-        if action == Action::Finish {
+        if action.is_finish() {
             break; // STOP — later records are not reached or painted.
         }
+        i = i.saturating_add(1);
+        rest = tail;
     }
     let scr = screen::fold(cols, rows, &[Record::Out(painted)]);
     (decisions, scr)
 }
 
+/// Encode one 5-byte [`Decision`] entry `(step: u32 LE, action_tag: u8)`.
+#[inline]
+#[must_use]
+pub const fn encode_decision(d: Decision) -> [u8; 5] {
+    let s = d.step;
+    let tag = match d.action {
+        Action::Speak => 0,
+        Action::CallTool => 1,
+        Action::Finish => 2,
+    };
+    [
+        s as u8,
+        (s >> 8) as u8,
+        (s >> 16) as u8,
+        (s >> 24) as u8,
+        tag,
+    ]
+}
+
+/// Decode one 5-byte [`Decision`] entry into `(step: u32, action_tag: u8)`.
+#[inline]
+#[must_use]
+pub const fn decode_decision(raw: &[u8; 5]) -> (u32, u8) {
+    let step = (raw[0] as u32)
+        | ((raw[1] as u32) << 8)
+        | ((raw[2] as u32) << 16)
+        | ((raw[3] as u32) << 24);
+    (step, raw[4])
+}
+
 /// Serialize the **decision trace** (not the raw records) to bytes — so mutating
 /// the planner changes this, which is what keeps the replay oracle non-vacuous.
 pub fn trace_bytes(decisions: &[Decision]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(decisions.len() * 5);
-    for d in decisions {
-        out.extend_from_slice(&d.step.to_le_bytes());
-        out.push(match d.action {
-            Action::Speak => 0,
-            Action::CallTool => 1,
-            Action::Finish => 2,
-        });
+    let mut out = Vec::new();
+    let mut rest = decisions;
+    while let [d, tail @ ..] = rest {
+        out.extend_from_slice(&encode_decision(*d));
+        rest = tail;
     }
     out
 }
 
 /// A content address for a decision trace (FNV-1a over [`trace_bytes`]).
 pub fn trace_fnv(decisions: &[Decision]) -> u64 {
-    fnv1a_64(&trace_bytes(decisions))
+    fnv1a_64(trace_bytes(decisions).as_slice())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trace_bytes_is_step_le_then_action_tag_per_decision() {
+        assert!(trace_bytes(&[]).is_empty());
+        let trace = [
+            Decision {
+                step: 0,
+                action: Action::Speak,
+            },
+            Decision {
+                step: 0x0102_0304,
+                action: Action::CallTool,
+            },
+            Decision {
+                step: u32::MAX,
+                action: Action::Finish,
+            },
+        ];
+        assert_eq!(
+            trace_bytes(&trace),
+            [
+                0, 0, 0, 0, 0, //
+                4, 3, 2, 1, 1, //
+                0xFF, 0xFF, 0xFF, 0xFF, 2,
+            ]
+        );
+    }
 }

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Andrew Yates
+#
+# THE ESCALATION TABLE aterm OPENS ITS WEAK TIERS WITH, and the Ordered horizon it opens
+# them at: aterm-link's `durability::escalation` rule for rule and in its order, and
+# `durability::ORDERED_HORIZON` (`Durability::tier`, `Durability::options`). Read by
+# `parse_escalation_file` (astream-broker `escalation.rs`).
+#
+# astream's tests load this file wherever they run aterm's broker (`guarded_durability`'s
+# `aterm_table`, `aterm_retention`'s tiers), and aterm-link's `astream_fixture_tests`
+# holds it equal to aterm's own table and horizon: a change on either side fails aterm's
+# test until this file and aterm's pin of astream move together.
+
+# The Ordered horizon: a full flush once this long has passed since the first ack none
+# covers.
+horizon=100ms
+
+# Halts on and off, barriers, notices: the fleet face only an `h-` grant writes, and the
+# god cap, whose writes have no principal.
+subject /f/*/fleet/>
+# A Mac's halt or halt-off on its own halt subject, and every relayed copy of one: with
+# aterm's mesh a person's halt request on the fleet face becomes that Mac's record here,
+# relayed to every Mac (aterm's one-mesh design, step C4).
+subject /f/*/halt/>
+# Anything addressed to a person's (or a service's) lane.
+subject /f/*/in/p/>
+# Every visible record a person's own bound producer stages: a human's principal is
+# `h-<name>`. Never a hidden one: not their bind, not a will registration.
+principal h-
+# A person's inbox commit: a hidden `/a/commit` only a group rule sees.
+group /f/*/cur/p/>

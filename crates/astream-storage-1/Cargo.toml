@@ -1,0 +1,11 @@
+[package]
+name = "astream-storage-1"
+description = "An independent model of at-rest AAD log binding, inbox cursor fencing, and crash-safe journal compaction (shard 1 of 6, batches 97..98); no astream runtime crate and no aterm code calls it. abrew is aterm's `atpkg` crate, aterm's Autopilot is `aterm-agent`'s harness, and its `sys` verbs and banners are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

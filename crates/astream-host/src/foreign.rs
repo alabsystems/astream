@@ -13,8 +13,9 @@
 //! * **replay** — OVERWRITE each result with the taped value (return register +
 //!   output buffer), so the child is a pure function of the tape; a tape that runs
 //!   short, yields the wrong kind, names a different file, or carries a `File`
-//!   record longer than the tracee's read buffer ABORTS (fail-closed, like
-//!   `ReplaySeam`: a panic, with the tracee killed and reaped on unwind).
+//!   record longer than the tracee's read buffer ABORTS (fail-closed: a panic,
+//!   with the tracee killed and reaped on unwind; the cooperative `ReplaySeam`
+//!   refuses the same divergences with a typed `ReplayDivergence` instead).
 //!
 //! Failures of the *machinery* — `pipe`/`fork`/`waitpid` errors, `PTRACE_TRACEME`
 //! denied (Yama `ptrace_scope`, seccomp, container profiles), a failed `ptrace`
@@ -779,5 +780,495 @@ pub fn replay(file: &str, tape: &EffectsLog) -> Result<u64, ForeignError> {
 pub fn run_naive(file: &str) -> Result<u64, ForeignError> {
     let mut t = spawn(file)?;
     trace(&mut t, file, Mode::Naive)?;
+    t.read_digest()
+}
+
+// ============================================================================
+// Seccomp-BPF pre-filter + full syscall neutralization + unmodified `execve`
+// (`docs/ROADMAP.md` §4, `seccomp_record_replay`)
+// ============================================================================
+
+#[cfg(target_arch = "aarch64")]
+const SYS_SECCOMP: c_long = 277;
+#[cfg(target_arch = "x86_64")]
+const SYS_SECCOMP: c_long = 317;
+
+const SECCOMP_SET_MODE_FILTER: c_long = 1;
+const PR_SET_NO_NEW_PRIVS: c_int = 38;
+const PTRACE_O_TRACESECCOMP_BIT: c_int = 1 << 7;
+const PTRACE_EVENT_SECCOMP_ID: c_int = 7;
+
+#[cfg(target_arch = "aarch64")]
+const NT_ARM_SYSTEM_CALL: usize = 0x404;
+
+#[cfg(target_arch = "aarch64")]
+const CURRENT_SECCOMP_ARCH: crate::seccomp::SeccompArch = crate::seccomp::SeccompArch::Aarch64;
+#[cfg(target_arch = "x86_64")]
+const CURRENT_SECCOMP_ARCH: crate::seccomp::SeccompArch = crate::seccomp::SeccompArch::X86_64;
+
+#[repr(C)]
+struct SockFprog {
+    len: u16,
+    filter: *const crate::seccomp::SockFilter,
+}
+
+/// Entry point invoked by the standalone unmodified `seccomp_child` binary (`#![forbid(unsafe_code)]`).
+///
+/// Makes zero `PTRACE_TRACEME` or `SIGSTOP` calls: reads one monotonic clock, 8 random bytes,
+/// and `file` via `openat`/`read`/`close`, folds `(clock, rand, bytes)`, writes the 8-byte
+/// little-endian digest to `STDOUT_FILENO`, and returns exit code `0` (`1` on short write).
+#[must_use]
+pub fn run_unmodified_probe(file: &str) -> i32 {
+    let Ok(cfile) = CString::new(file) else {
+        return 2;
+    };
+    // SAFETY: direct syscalls on valid stack buffers and NUL-terminated `cfile`.
+    unsafe {
+        let mut ts = Timespec { sec: 0, nsec: 0 };
+        libc::syscall(nr::CLOCK_GETTIME, 1 as c_long, &mut ts as *mut _ as c_long);
+        let clock = (ts.nsec as u64) ^ (ts.sec as u64);
+
+        let mut r: u64 = 0;
+        libc::syscall(
+            nr::GETRANDOM,
+            &mut r as *mut _ as c_long,
+            8 as c_long,
+            0 as c_long,
+        );
+
+        let fd = libc::syscall(
+            nr::OPENAT,
+            -100 as c_long,
+            cfile.as_ptr() as c_long,
+            0 as c_long,
+            0 as c_long,
+        );
+        let mut buf = [0u8; READ_BUF];
+        let n = libc::syscall(
+            nr::READ,
+            fd,
+            buf.as_mut_ptr() as c_long,
+            buf.len() as c_long,
+        );
+        libc::syscall(nr::CLOSE, fd);
+        let nb = if n < 0 {
+            0
+        } else {
+            (n as usize).min(buf.len())
+        };
+        let digest = fold(clock, r, &buf[..nb]);
+        let bytes = digest.to_le_bytes();
+        let wrote = libc::write(
+            libc::STDOUT_FILENO,
+            bytes.as_ptr() as *const c_void,
+            bytes.len(),
+        );
+        if wrote == (bytes.len() as isize) {
+            0
+        } else {
+            1
+        }
+    }
+}
+
+fn ptrace_cont(pid: c_int, sig: c_int) -> io::Result<()> {
+    // SAFETY: PTRACE_CONT resumes our stopped tracee; `sig` is signal number or 0.
+    let rc = unsafe {
+        libc::ptrace(
+            libc::PTRACE_CONT,
+            pid,
+            std::ptr::null_mut::<c_void>(),
+            sig as usize as *mut c_void,
+        )
+    };
+    check(rc).map(drop)
+}
+
+fn neutralize_syscall(pid: c_int, regs: &mut Regs) -> io::Result<()> {
+    #[cfg(target_arch = "x86_64")]
+    {
+        regs.orig_rax = (-1i64) as u64;
+        set_regs(pid, regs)
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        let _ = regs;
+        let mut sysno: c_int = -1;
+        let mut iov = libc::iovec {
+            iov_base: &mut sysno as *mut _ as *mut c_void,
+            iov_len: std::mem::size_of::<c_int>(),
+        };
+        // SAFETY: NT_ARM_SYSTEM_CALL sets the active syscall number to -1 on stopped aarch64 tracee.
+        let rc = unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETREGSET,
+                pid,
+                NT_ARM_SYSTEM_CALL as *mut c_void,
+                &mut iov as *mut _ as *mut c_void,
+            )
+        };
+        check(rc).map(drop)
+    }
+}
+
+fn peek_cstr(pid: c_int, addr: u64, max_len: usize) -> io::Result<String> {
+    if addr == 0 {
+        return Ok(String::new());
+    }
+    let cap = max_len.min(4096);
+    let mut out = Vec::with_capacity(128);
+    let mut cur = addr;
+    while out.len() < cap {
+        let b = peek(pid, cur, 1)?;
+        if b[0] == 0 {
+            break;
+        }
+        out.push(b[0]);
+        cur = cur.saturating_add(1);
+    }
+    Ok(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Step a tracee currently stopped at `PTRACE_EVENT_SECCOMP` across its single syscall
+/// (either real on `Record`/passthrough or neutralized `-1` on `Replay`) to the matching
+/// syscall-exit stop (`SYSCALL_STOP`), returning the exit `Regs`.
+fn step_to_syscall_exit(t: &mut Tracee) -> Result<Regs, ForeignError> {
+    let pid = t.pid;
+    ptrace_syscall(pid, 0)?;
+    loop {
+        let status = wait_status(t)?;
+        match terminal(status) {
+            Some(Ok(code)) => {
+                t.reaped = true;
+                return Err(ForeignError::ExitedEarly(code));
+            }
+            Some(Err(sig)) => {
+                t.reaped = true;
+                return Err(ForeignError::Signaled(sig));
+            }
+            None => {}
+        }
+        if !libc::WIFSTOPPED(status) {
+            continue;
+        }
+        let sig = libc::WSTOPSIG(status);
+        if sig == SYSCALL_STOP {
+            return Ok(get_regs(pid)?);
+        }
+        let forward = if sig == libc::SIGTRAP || sig == libc::SIGSTOP {
+            0
+        } else {
+            sig
+        };
+        ptrace_syscall(pid, forward)?;
+    }
+}
+
+fn spawn_exec(bin_path: &str, file_path: &str) -> Result<Tracee, ForeignError> {
+    let Ok(cbin) = CString::new(bin_path) else {
+        return Err(ForeignError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "bin_path has a NUL byte",
+        )));
+    };
+    let Ok(cfile) = CString::new(file_path) else {
+        return Err(ForeignError::Io(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "file_path has a NUL byte",
+        )));
+    };
+    let mut fds: [c_int; 2] = [-1, -1];
+    // SAFETY: pipe2 initializes two valid CLOEXEC descriptors.
+    if unsafe { libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) } < 0 {
+        return Err(ForeignError::Io(io::Error::last_os_error()));
+    }
+    let filter = crate::seccomp::compile_five_syscall_filter(CURRENT_SECCOMP_ARCH);
+    // SAFETY: fork + async-signal-safe setup + seccomp filter install + execve in child.
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        let e = io::Error::last_os_error();
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
+        return Err(ForeignError::Io(e));
+    }
+    if pid == 0 {
+        unsafe {
+            libc::close(fds[0]);
+            if libc::dup2(fds[1], libc::STDOUT_FILENO) < 0 {
+                libc::_exit(125);
+            }
+            libc::close(fds[1]);
+            let null = std::ptr::null_mut::<c_void>();
+            if libc::ptrace(libc::PTRACE_TRACEME, 0, null, null) < 0 {
+                libc::_exit(TRACE_DENIED_EXIT);
+            }
+            let me = libc::syscall(nr::GETPID) as c_int;
+            libc::kill(me, libc::SIGSTOP);
+            if libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0 {
+                libc::_exit(TRACE_DENIED_EXIT);
+            }
+            let prog = SockFprog {
+                len: filter.len() as u16,
+                filter: filter.as_ptr(),
+            };
+            if libc::syscall(
+                SYS_SECCOMP,
+                SECCOMP_SET_MODE_FILTER,
+                0 as c_long,
+                &prog as *const SockFprog as c_long,
+            ) < 0
+            {
+                libc::_exit(TRACE_DENIED_EXIT);
+            }
+            let argv = [cbin.as_ptr(), cfile.as_ptr(), std::ptr::null()];
+            let envp = [std::ptr::null()];
+            libc::execve(cbin.as_ptr(), argv.as_ptr(), envp.as_ptr());
+            libc::_exit(127);
+        }
+    }
+    // SAFETY: close parent copy of write pipe end.
+    unsafe { libc::close(fds[1]) };
+    Ok(Tracee {
+        pid,
+        rfd: fds[0],
+        reaped: false,
+    })
+}
+
+fn attach_seccomp_tracer(t: &mut Tracee) -> Result<(), ForeignError> {
+    let pid = t.pid;
+    let status = wait_status(t)?;
+    match terminal(status) {
+        Some(Ok(code)) => {
+            t.reaped = true;
+            return Err(if code == TRACE_DENIED_EXIT {
+                ForeignError::TraceDenied
+            } else {
+                ForeignError::ExitedEarly(code)
+            });
+        }
+        Some(Err(sig)) => {
+            t.reaped = true;
+            return Err(ForeignError::Signaled(sig));
+        }
+        None => {}
+    }
+    let opts = [
+        libc::PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACESECCOMP_BIT | libc::PTRACE_O_EXITKILL,
+        libc::PTRACE_O_TRACESYSGOOD | PTRACE_O_TRACESECCOMP_BIT,
+    ];
+    let mut set = false;
+    for o in opts {
+        // SAFETY: SETOPTIONS on our stopped tracee.
+        let rc = unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETOPTIONS,
+                pid,
+                std::ptr::null_mut::<c_void>(),
+                o as usize as *mut c_void,
+            )
+        };
+        if rc >= 0 {
+            set = true;
+            break;
+        }
+    }
+    if !set {
+        return Err(ForeignError::Io(io::Error::last_os_error()));
+    }
+    ptrace_cont(pid, 0)?;
+    Ok(())
+}
+
+fn is_seccomp_event(status: c_int) -> bool {
+    libc::WSTOPSIG(status) == libc::SIGTRAP && ((status >> 16) & 0xffff) == PTRACE_EVENT_SECCOMP_ID
+}
+
+/// Record an unmodified `execve`'d child binary `bin_path` reading `file` under the
+/// 5-syscall `seccomp-bpf` pre-filter (`O(intercepted)` stops).
+pub fn record_exec(bin_path: &str, file: &str) -> Result<(EffectsLog, u64), ForeignError> {
+    let mut t = spawn_exec(bin_path, file)?;
+    attach_seccomp_tracer(&mut t)?;
+    let pid = t.pid;
+    let mut tape = Vec::new();
+    let mut target_fd: Option<i64> = None;
+
+    loop {
+        let status = wait_status(&mut t)?;
+        match terminal(status) {
+            Some(Ok(_)) => {
+                t.reaped = true;
+                break;
+            }
+            Some(Err(sig)) => {
+                t.reaped = true;
+                return Err(ForeignError::Signaled(sig));
+            }
+            None => {}
+        }
+        if !libc::WIFSTOPPED(status) {
+            continue;
+        }
+        if !is_seccomp_event(status) {
+            let sig = libc::WSTOPSIG(status);
+            let forward = if sig == libc::SIGTRAP || sig == libc::SIGSTOP {
+                0
+            } else {
+                sig
+            };
+            ptrace_cont(pid, forward)?;
+            continue;
+        }
+        let regs = get_regs(pid)?;
+        match CURRENT_SECCOMP_ARCH.classify_nr(regs.nr() as i64) {
+            Some(crate::seccomp::InterceptedSyscall::ClockGettime) => {
+                let buf_addr = regs.arg(1);
+                let _exit = step_to_syscall_exit(&mut t)?;
+                let ts = peek(pid, buf_addr, 16)?;
+                let clock = u64::from_le_bytes(ts[8..16].try_into().unwrap())
+                    ^ u64::from_le_bytes(ts[0..8].try_into().unwrap());
+                tape.push(EffectRecord::Clock(clock));
+            }
+            Some(crate::seccomp::InterceptedSyscall::Getrandom) => {
+                let buf_addr = regs.arg(0);
+                let _exit = step_to_syscall_exit(&mut t)?;
+                let b = peek(pid, buf_addr, 8)?;
+                tape.push(EffectRecord::Rand(u64::from_le_bytes(
+                    b[..8].try_into().unwrap(),
+                )));
+            }
+            Some(crate::seccomp::InterceptedSyscall::Openat) => {
+                let path_str = peek_cstr(pid, regs.arg(1), 4096)?;
+                if path_str == file {
+                    let exit = step_to_syscall_exit(&mut t)?;
+                    target_fd = Some(exit.ret() as i64);
+                }
+            }
+            Some(crate::seccomp::InterceptedSyscall::Read) => {
+                let fd = regs.arg(0) as i64;
+                if target_fd == Some(fd) {
+                    let buf_addr = regs.arg(1);
+                    let count = regs.arg(2);
+                    let exit = step_to_syscall_exit(&mut t)?;
+                    let n = exit.ret() as i64;
+                    let bytes = if n <= 0 {
+                        Vec::new()
+                    } else {
+                        peek(pid, buf_addr, (n as u64).min(count) as usize)?
+                    };
+                    tape.push(EffectRecord::File {
+                        path: file.to_owned(),
+                        bytes,
+                    });
+                }
+            }
+            Some(crate::seccomp::InterceptedSyscall::Close) => {
+                let fd = regs.arg(0) as i64;
+                if target_fd == Some(fd) {
+                    target_fd = None;
+                }
+            }
+            None => {}
+        }
+        ptrace_cont(pid, 0)?;
+    }
+
+    let digest = t.read_digest()?;
+    Ok((EffectsLog(tape), digest))
+}
+
+/// Replay an unmodified `execve`'d child binary `bin_path` driven by `tape` with **full
+/// syscall neutralization**: every intercepted target syscall is rewritten to `-1` at
+/// `PTRACE_EVENT_SECCOMP` before reaching the kernel, then its taped return value and buffer
+/// are injected at the `-ENOSYS` exit stop. Aborts (panics, killing + reaping the tracee) on
+/// a short, wrong-kind, path-divergent, or over-buffer tape.
+pub fn replay_exec(bin_path: &str, file: &str, tape: &EffectsLog) -> Result<u64, ForeignError> {
+    let mut t = spawn_exec(bin_path, file)?;
+    attach_seccomp_tracer(&mut t)?;
+    let pid = t.pid;
+    let mut drv = crate::seccomp::NeutralizedReplayDriver::new(file, tape);
+
+    loop {
+        let status = wait_status(&mut t)?;
+        match terminal(status) {
+            Some(Ok(_)) => {
+                t.reaped = true;
+                break;
+            }
+            Some(Err(sig)) => {
+                t.reaped = true;
+                return Err(ForeignError::Signaled(sig));
+            }
+            None => {}
+        }
+        if !libc::WIFSTOPPED(status) {
+            continue;
+        }
+        if !is_seccomp_event(status) {
+            let sig = libc::WSTOPSIG(status);
+            let forward = if sig == libc::SIGTRAP || sig == libc::SIGSTOP {
+                0
+            } else {
+                sig
+            };
+            ptrace_cont(pid, forward)?;
+            continue;
+        }
+        let mut regs = get_regs(pid)?;
+        let (decision, poke_addr) = match CURRENT_SECCOMP_ARCH.classify_nr(regs.nr() as i64) {
+            Some(crate::seccomp::InterceptedSyscall::ClockGettime) => {
+                let d = drv
+                    .on_clock_gettime()
+                    .unwrap_or_else(|e| abort_replay(&format!("{e:?}")));
+                (d, regs.arg(1))
+            }
+            Some(crate::seccomp::InterceptedSyscall::Getrandom) => {
+                let d = drv
+                    .on_getrandom(regs.arg(1))
+                    .unwrap_or_else(|e| abort_replay(&format!("{e:?}")));
+                (d, regs.arg(0))
+            }
+            Some(crate::seccomp::InterceptedSyscall::Openat) => {
+                let path_str = peek_cstr(pid, regs.arg(1), 4096)?;
+                (drv.on_openat(&path_str), 0)
+            }
+            Some(crate::seccomp::InterceptedSyscall::Read) => {
+                let d = drv
+                    .on_read(regs.arg(0) as i64, regs.arg(2))
+                    .unwrap_or_else(|e| abort_replay(&format!("{e:?}")));
+                (d, regs.arg(1))
+            }
+            Some(crate::seccomp::InterceptedSyscall::Close) => {
+                (drv.on_close(regs.arg(0) as i64), 0)
+            }
+            None => (
+                crate::seccomp::SeccompReplayDecision::PassthroughRuntimeIo,
+                0,
+            ),
+        };
+
+        match decision {
+            crate::seccomp::SeccompReplayDecision::PassthroughRuntimeIo => {
+                ptrace_cont(pid, 0)?;
+            }
+            crate::seccomp::SeccompReplayDecision::NeutralizeAndInject {
+                return_value,
+                poke_bytes,
+                ..
+            } => {
+                neutralize_syscall(pid, &mut regs)?;
+                let mut exit_regs = step_to_syscall_exit(&mut t)?;
+                if let Some(bytes) = poke_bytes {
+                    poke(pid, poke_addr, &bytes)?;
+                }
+                exit_regs.set_ret(return_value as u64);
+                set_regs(pid, &exit_regs)?;
+                ptrace_cont(pid, 0)?;
+            }
+        }
+    }
+
     t.read_digest()
 }

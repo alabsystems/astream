@@ -1,0 +1,12 @@
+[package]
+name = "astream-retire-history"
+description = "An independent model of bounded-step LastStep::Pending subject retirement history gated by visible_head, producer subject-budget reclaim across compaction, conditional Retire CAS classifiers, held-store spill ledgers, and Linux seccomp-bpf replay syscall neutralization; no astream runtime crate and no aterm code calls it. The shipped `Retire`, its history and the held store are `astream-broker`'s `store.rs`, `last_view.rs` and `held.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }

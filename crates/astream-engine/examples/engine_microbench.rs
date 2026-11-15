@@ -6,7 +6,7 @@
 //! cross-system comparison; those land with the broker on disclosed hardware.
 //!
 //! Run with `--release` for representative numbers:
-//!   cargo run --release -p astream-engine --example engine_microbench
+//!   targo --unverified run --release -p astream-engine --example engine_microbench
 
 use astream_engine::{Disk, Effects, Log, MemDisk, Offset, Seeded};
 use astream_term::Record;

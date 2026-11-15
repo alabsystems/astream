@@ -1,0 +1,11 @@
+[package]
+name = "astream-storage-6"
+description = "An independent model of at-rest AAD log binding, inbox cursor fencing, and crash-safe journal compaction (shard 6 of 6, batches 107..108); no astream runtime crate and no aterm code calls it. `aterm harness agy` is `aterm-agent`'s `harness::agy_quota`, and aterm's OSC 8 handling is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

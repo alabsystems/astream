@@ -5,8 +5,8 @@
 //!   would not build. astream forbids git dependencies — in every dependency
 //!   table, in `[patch]` / `[replace]` redirects, and as a `git+` source in
 //!   `Cargo.lock` (the ground truth for what cargo fetches).
-//! * `undeclared-cfg`     — a templating typo (`cloud-dropbox` ->
-//!   `cloud-Andrew Yates`) silently dead-coded a module.
+//! * `undeclared-cfg`     — a templating typo in a feature name silently
+//!   dead-coded a module.
 //!   A cfg-feature reference to an undeclared feature
 //!   is rejected.
 //! * `drift-marker`       — incomplete / session-drift checkpoints landed on
@@ -17,6 +17,13 @@
 //!   rejected.
 //! * `verify-isolation`   — verification tooling broke the substrate build.
 //!   A `verify*` workspace member is rejected.
+//! * `stock-lexable`      — inline Clean islands broke every stock-compiled build
+//!   of astream (aterm's cross cells and its Linux lane,
+//!   2026-10-17): no stock rustc can lex `clean { … }`
+//!   or parse a bare `ensures` clause. An island outside
+//!   a `*_island.rs` file, an island file mounted without
+//!   `cfg(clean_islands)`, and a contract clause outside
+//!   `contract_fn!` are rejected.
 //! * `doc-tamper`         — the README cited a status file that did not exist.
 //!   The generated evidence block must match the
 //!   manifest render exactly.
@@ -25,10 +32,13 @@
 //!   backed by a known no-op program (a denylist:
 //!   `true`, `:`, `echo`, `printf`, `cat`, `head`,
 //!   `tail`), whose command does not fit its kind
-//!   (`test` must run `cargo test`, `build` must run
-//!   `cargo build`/`check`, `selftest` must pin a hash),
-//!   or citing a path / cargo target that is absent is
-//!   rejected. This binds the manifest to reality at
+//!   (`test` must run `targo <lane> test`, `build`
+//!   must run `targo <lane> build`/`check`, `selftest`
+//!   must pin a hash), that runs the stock toolchain
+//!   (`cargo`, `rustc`, a `+toolchain` selector) or a
+//!   targo compilation that names no lane, or citing a
+//!   path / cargo target that is absent is rejected.
+//!   This binds the manifest to reality at
 //!   *gate* time, not only when `run` executes it. It
 //!   NARROWS the decorative-proof class — an exit-0
 //!   program outside the denylist still passes the gate
@@ -39,24 +49,60 @@
 //! gap: a determined author can still write a tautology that technically
 //! touches a symbol). They are the enforcement spine, not a correctness proof.
 
-use crate::manifest::{cargo_subcommand, command_program, is_env_assignment, Manifest};
+use crate::manifest::{
+    command_program, is_env_assignment, targo_call, targo_subcommand, Manifest, TARGO_LANES,
+};
 use crate::needles;
 use crate::render;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "gate_island.rs"]
+mod gate_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::gate_violation_advance;
+#[cfg(clean_islands)]
+pub use gate_island::gate_violation_advance;
+
+contract_fn! {
+    /// Verified check that a merge-gate scan produced zero findings (`violations == 0`),
+    /// linked via `clean-kernel-defeq` to `gate_is_clean_isl`.
+    #[must_use]
+    pub const fn gate_is_clean(violations: usize) -> bool
+    clauses [ensures result == (violations == 0)]
+    {
+        violations == 0
+    }
+}
+
 /// A single gate finding.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Eq)]
 pub struct Violation {
     pub lint: String,
     pub path: String,
     pub detail: String,
 }
 
+impl PartialEq for Violation {
+    fn eq(&self, other: &Self) -> bool {
+        self.lint.as_bytes() == other.lint.as_bytes()
+            && self.path.as_bytes() == other.path.as_bytes()
+            && self.detail.as_bytes() == other.detail.as_bytes()
+    }
+}
+
 impl std::fmt::Display for Violation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "[{}] {}: {}", self.lint, self.path, self.detail)
+        f.write_str("[")?;
+        f.write_str(self.lint.as_str())?;
+        f.write_str("] ")?;
+        f.write_str(self.path.as_str())?;
+        f.write_str(": ")?;
+        f.write_str(self.detail.as_str())
     }
 }
 
@@ -83,9 +129,10 @@ const CACHEDIR_SIGNATURE: &str = "Signature: 8a477f597d28d172789f06886806bc55";
 /// must at minimum say out loud that it was. Planting a tag to hide source from
 /// the gate is then a visible act in the gate's own output, not a quiet bypass.
 fn is_cache_dir(dir: &Path) -> bool {
-    fs::read_to_string(dir.join("CACHEDIR.TAG"))
-        .map(|text| text.starts_with(CACHEDIR_SIGNATURE))
-        .unwrap_or(false)
+    match fs::read(dir.join("CACHEDIR.TAG")) {
+        Ok(bytes) => bytes.starts_with(CACHEDIR_SIGNATURE.as_bytes()),
+        Err(_) => false,
+    }
 }
 
 /// Named hidden directories that hold TOOL STATE, never source, skipped at any
@@ -107,29 +154,69 @@ const SKIP_HIDDEN: &[&str] = &[
 /// any other — a bare-name exclusion would be a one-`mkdir` bypass of every lint.
 const OWN_FIXTURES: &str = "crates/astream-evidence/tests/fixtures";
 
+#[inline]
+const fn is_ascii_ws(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0C)
+}
+
+#[inline]
+const fn is_ascii_digit_byte(b: u8) -> bool {
+    b >= b'0' && b <= b'9'
+}
+
+#[inline]
+const fn is_ascii_alpha_byte(b: u8) -> bool {
+    (b >= b'a' && b <= b'z') || (b >= b'A' && b <= b'Z')
+}
+
+#[inline]
+const fn is_ascii_alnum_byte(b: u8) -> bool {
+    is_ascii_digit_byte(b) || is_ascii_alpha_byte(b)
+}
+
 fn rel(root: &Path, p: &Path) -> String {
     p.strip_prefix(root).unwrap_or(p).display().to_string()
 }
 
 fn has_ext(p: &Path, ext: &str) -> bool {
-    p.extension().and_then(|e| e.to_str()) == Some(ext)
+    match p.extension() {
+        Some(e) => e.to_str() == Some(ext),
+        None => false,
+    }
 }
 
 fn is_cargo_manifest(p: &Path) -> bool {
-    p.file_name().and_then(|n| n.to_str()) == Some("Cargo.toml")
+    match p.file_name() {
+        Some(n) => n.to_str() == Some("Cargo.toml"),
+        None => false,
+    }
 }
 
 fn is_cargo_lockfile(p: &Path) -> bool {
-    p.file_name().and_then(|n| n.to_str()) == Some("Cargo.lock")
+    match p.file_name() {
+        Some(n) => n.to_str() == Some("Cargo.lock"),
+        None => false,
+    }
 }
 
 /// Read a text file for scanning. Non-UTF-8 bytes are replaced, never used as
 /// an excuse to skip the file: `read_to_string` fails on a single stray
 /// Latin-1 byte, and an empty scan would let one byte hide every marker.
 fn read_text_lossy(p: &Path) -> String {
-    fs::read(p)
-        .map(|bytes| String::from_utf8_lossy(&bytes).into_owned())
-        .unwrap_or_default()
+    let Ok(bytes) = fs::read(p) else {
+        return String::new();
+    };
+    if let Ok(s) = core::str::from_utf8(&bytes) {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(chunk.valid());
+        if !chunk.invalid().is_empty() {
+            out.push('\u{FFFD}');
+        }
+    }
+    out
 }
 
 /// Recursively list files under `root`, plus the cache directories the walk
@@ -163,12 +250,13 @@ fn collect_files_reporting(root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>) {
                 continue;
             }
             if ft.is_dir() {
-                let name = entry.file_name().to_string_lossy().to_string();
-                if SKIP_DIRS.contains(&name.as_str())
-                    || SKIP_HIDDEN.contains(&name.as_str())
-                    || path == own_fixtures
-                {
+                if path == own_fixtures {
                     continue;
+                }
+                if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                    if SKIP_DIRS.contains(&name) || SKIP_HIDDEN.contains(&name) {
+                        continue;
+                    }
                 }
                 if is_cache_dir(&path) {
                     caches.push(path);
@@ -220,6 +308,7 @@ pub fn run_gate_reporting(root: &Path) -> (Vec<Violation>, Vec<PathBuf>) {
     v.extend(lint_drift_markers(root, &files));
     v.extend(lint_tautological_tests(root, &files));
     v.extend(lint_verify_isolation(root, &files));
+    v.extend(lint_stock_lexable(root, &files));
     v.extend(lint_doc_tamper(root));
     v.extend(lint_manifest_integrity(root, &files));
     (v, caches)
@@ -244,47 +333,55 @@ fn manifest_git_deps(text: &str) -> Vec<String> {
     };
     fn scan(tbl: &Table, hits: &mut Vec<String>) {
         for (name, spec) in tbl {
-            if spec
-                .as_table()
-                .map(|t| t.contains_key("git"))
-                .unwrap_or(false)
-            {
-                hits.push(name.clone());
+            if let Some(t) = spec.as_table() {
+                if t.contains_key("git") {
+                    hits.push(name.clone());
+                }
             }
         }
     }
     let dep_sects = ["dependencies", "dev-dependencies", "build-dependencies"];
     for sect in dep_sects {
-        if let Some(t) = val.get(sect).and_then(|v| v.as_table()) {
-            scan(t, &mut hits);
+        if let Some(v) = val.get(sect) {
+            if let Some(t) = v.as_table() {
+                scan(t, &mut hits);
+            }
         }
     }
-    if let Some(ws) = val
-        .get("workspace")
-        .and_then(|v| v.get("dependencies"))
-        .and_then(|v| v.as_table())
-    {
-        scan(ws, &mut hits);
+    if let Some(w) = val.get("workspace") {
+        if let Some(d) = w.get("dependencies") {
+            if let Some(ws) = d.as_table() {
+                scan(ws, &mut hits);
+            }
+        }
     }
-    if let Some(targets) = val.get("target").and_then(|v| v.as_table()) {
-        for (_, t) in targets {
-            for sect in dep_sects {
-                if let Some(d) = t.get(sect).and_then(|v| v.as_table()) {
-                    scan(d, &mut hits);
+    if let Some(tv) = val.get("target") {
+        if let Some(targets) = tv.as_table() {
+            for (_, t) in targets {
+                for sect in dep_sects {
+                    if let Some(dv) = t.get(sect) {
+                        if let Some(d) = dv.as_table() {
+                            scan(d, &mut hits);
+                        }
+                    }
                 }
             }
         }
     }
     // `[patch.crates-io] foo = { git = ... }` (any source name) and `[replace]`.
-    if let Some(patch) = val.get("patch").and_then(|v| v.as_table()) {
-        for (_, redirects) in patch {
-            if let Some(t) = redirects.as_table() {
-                scan(t, &mut hits);
+    if let Some(pv) = val.get("patch") {
+        if let Some(patch) = pv.as_table() {
+            for (_, redirects) in patch {
+                if let Some(t) = redirects.as_table() {
+                    scan(t, &mut hits);
+                }
             }
         }
     }
-    if let Some(t) = val.get("replace").and_then(|v| v.as_table()) {
-        scan(t, &mut hits);
+    if let Some(rv) = val.get("replace") {
+        if let Some(t) = rv.as_table() {
+            scan(t, &mut hits);
+        }
     }
     hits
 }
@@ -298,16 +395,23 @@ fn lockfile_git_sources(text: &str) -> Vec<String> {
         Ok(v) => v,
         Err(_) => return hits,
     };
-    if let Some(packages) = val.get("package").and_then(|v| v.as_array()) {
-        for p in packages {
-            let is_git = p
-                .get("source")
-                .and_then(|s| s.as_str())
-                .map(|s| s.starts_with("git+"))
-                .unwrap_or(false);
-            if is_git {
-                let name = p.get("name").and_then(|n| n.as_str()).unwrap_or("?");
-                hits.push(name.to_string());
+    if let Some(pv) = val.get("package") {
+        if let Some(packages) = pv.as_array() {
+            for p in packages {
+                let is_git = match p.get("source") {
+                    Some(sv) => match sv.as_str() {
+                        Some(s) => s.starts_with("git+"),
+                        None => false,
+                    },
+                    None => false,
+                };
+                if is_git {
+                    let name = match p.get("name") {
+                        Some(nv) => nv.as_str().unwrap_or("?"),
+                        None => "?",
+                    };
+                    hits.push(name.to_string());
+                }
             }
         }
     }
@@ -316,28 +420,30 @@ fn lockfile_git_sources(text: &str) -> Vec<String> {
 
 fn lint_no_git_deps(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
     let mut out = Vec::new();
-    for f in files.iter().filter(|f| is_cargo_manifest(f)) {
-        let text = read_text_lossy(f);
-        for name in manifest_git_deps(&text) {
-            out.push(Violation {
-                lint: "no-git-deps".to_string(),
-                path: rel(root, f),
-                detail: format!(
-                    "dependency {name:?} is a git dependency (forbidden — breaks reproducible build)"
-                ),
-            });
+    for f in files {
+        if is_cargo_manifest(f) {
+            let text = read_text_lossy(f);
+            for name in manifest_git_deps(&text) {
+                out.push(Violation {
+                    lint: "no-git-deps".to_string(),
+                    path: rel(root, f),
+                    detail: format!(
+                        "dependency {name:?} is a git dependency (forbidden — breaks reproducible build)"
+                    ),
+                });
+            }
         }
-    }
-    for f in files.iter().filter(|f| is_cargo_lockfile(f)) {
-        let text = read_text_lossy(f);
-        for name in lockfile_git_sources(&text) {
-            out.push(Violation {
-                lint: "no-git-deps".to_string(),
-                path: rel(root, f),
-                detail: format!(
-                    "locked package {name:?} resolves to a git source (forbidden — breaks reproducible build)"
-                ),
-            });
+        if is_cargo_lockfile(f) {
+            let text = read_text_lossy(f);
+            for name in lockfile_git_sources(&text) {
+                out.push(Violation {
+                    lint: "no-git-deps".to_string(),
+                    path: rel(root, f),
+                    detail: format!(
+                        "locked package {name:?} resolves to a git source (forbidden — breaks reproducible build)"
+                    ),
+                });
+            }
         }
     }
     out
@@ -347,18 +453,24 @@ fn lint_no_git_deps(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
 
 fn declared_features(cargo_toml: &Path) -> HashSet<String> {
     let mut set = HashSet::new();
-    let text = fs::read_to_string(cargo_toml).unwrap_or_default();
+    let text = read_text_lossy(cargo_toml);
     let Ok(val) = text.parse::<toml::Value>() else {
         return set;
     };
     // `dep:NAME` anywhere in [features] suppresses NAME's implicit feature.
     let mut dep_prefixed = HashSet::new();
-    if let Some(tbl) = val.get("features").and_then(|v| v.as_table()) {
-        for (k, members) in tbl {
-            set.insert(k.clone());
-            for m in members.as_array().into_iter().flatten() {
-                if let Some(dep) = m.as_str().and_then(|s| s.strip_prefix("dep:")) {
-                    dep_prefixed.insert(dep.to_string());
+    if let Some(fv) = val.get("features") {
+        if let Some(tbl) = fv.as_table() {
+            for (k, members) in tbl {
+                set.insert(k.clone());
+                if let Some(arr) = members.as_array() {
+                    for m in arr {
+                        if let Some(s) = m.as_str() {
+                            if let Some(dep) = s.strip_prefix("dep:") {
+                                dep_prefixed.insert(dep.to_string());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -366,23 +478,33 @@ fn declared_features(cargo_toml: &Path) -> HashSet<String> {
     // Otherwise an optional dependency implicitly declares a like-named
     // feature, whether it is a normal or build dependency, target-specific or not.
     let sects = ["dependencies", "build-dependencies"];
-    let targets = val.get("target").and_then(|v| v.as_table());
-    let tables = sects
-        .iter()
-        .filter_map(|s| val.get(*s))
-        .chain(
-            targets
-                .into_iter()
-                .flat_map(|t| t.values())
-                .flat_map(|t| sects.iter().filter_map(|s| t.get(*s))),
-        )
-        .filter_map(|v| v.as_table());
+    let mut tables = Vec::new();
+    for s in sects {
+        if let Some(v) = val.get(s) {
+            if let Some(t) = v.as_table() {
+                tables.push(t);
+            }
+        }
+    }
+    if let Some(tv) = val.get("target") {
+        if let Some(targets) = tv.as_table() {
+            for t in targets.values() {
+                for s in sects {
+                    if let Some(v) = t.get(s) {
+                        if let Some(dt) = v.as_table() {
+                            tables.push(dt);
+                        }
+                    }
+                }
+            }
+        }
+    }
     for deps in tables {
         for (name, spec) in deps {
-            let optional = spec
-                .get("optional")
-                .and_then(|o| o.as_bool())
-                .unwrap_or(false);
+            let optional = match spec.get("optional") {
+                Some(o) => o.as_bool().unwrap_or(false),
+                None => false,
+            };
             if optional && !dep_prefixed.contains(name) {
                 set.insert(name.clone());
             }
@@ -407,7 +529,10 @@ fn nearest_features<'a>(
             }
         }
     }
-    best.map(|(_, f)| f)
+    match best {
+        Some((_, f)) => Some(f),
+        None => None,
+    }
 }
 
 /// Every feature name referenced by a `cfg(...)` feature predicate in `text`.
@@ -429,52 +554,83 @@ fn feature_names(text: &str) -> Vec<String> {
     let b = text.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
-    while let Some(p) = text[i..].find("feature") {
-        let start = i + p;
+    while i < text.len() {
+        let Some(tail) = text.get(i..) else {
+            break;
+        };
+        let Some(p) = tail.find("feature") else {
+            break;
+        };
+        let start = i.saturating_add(p);
         let mut k = start;
-        while k > 0 && b[k - 1].is_ascii_whitespace() {
+        while k > 0 {
+            let Some(&prev) = b.get(k - 1) else {
+                break;
+            };
+            if !is_ascii_ws(prev) {
+                break;
+            }
             k -= 1;
         }
-        if k == 0 || (b[k - 1] != b'(' && b[k - 1] != b',') {
-            i = start + "feature".len();
+        if k == 0 || !matches!(b.get(k - 1), Some(b'(' | b',')) {
+            i = start.saturating_add("feature".len());
             continue;
         }
-        let mut j = start + "feature".len();
-        while j < b.len() && b[j].is_ascii_whitespace() {
-            j += 1;
-        }
-        if j < b.len() && b[j] == b'=' {
-            j += 1;
-            while j < b.len() && b[j].is_ascii_whitespace() {
-                j += 1;
+        let mut j = start.saturating_add("feature".len());
+        while let Some(&ch) = b.get(j) {
+            if !is_ascii_ws(ch) {
+                break;
             }
-            if j < b.len() && b[j] == b'"' {
-                j += 1;
-                if let Some(end) = text[j..].find('"') {
-                    out.push(text[j..j + end].to_string());
-                    i = j + end + 1;
-                    continue;
+            j = j.saturating_add(1);
+        }
+        if b.get(j) == Some(&b'=') {
+            j = j.saturating_add(1);
+            while let Some(&ch) = b.get(j) {
+                if !is_ascii_ws(ch) {
+                    break;
+                }
+                j = j.saturating_add(1);
+            }
+            if b.get(j) == Some(&b'"') {
+                j = j.saturating_add(1);
+                if let Some(rem) = text.get(j..) {
+                    if let Some(end) = rem.find('"') {
+                        if let Some(feat) = text.get(j..j.saturating_add(end)) {
+                            out.push(feat.to_string());
+                        }
+                        i = j.saturating_add(end).saturating_add(1);
+                        continue;
+                    }
                 }
             }
         }
-        i = start + "feature".len();
+        i = start.saturating_add("feature".len());
     }
     out
 }
 
 fn lint_undeclared_cfg(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
-    let crates: Vec<(PathBuf, HashSet<String>)> = files
-        .iter()
-        .filter(|f| is_cargo_manifest(f))
-        .filter_map(|f| f.parent().map(|d| (d.to_path_buf(), declared_features(f))))
-        .collect();
+    let mut crates: Vec<(PathBuf, HashSet<String>)> = Vec::new();
+    for f in files {
+        if is_cargo_manifest(f) {
+            if let Some(d) = f.parent() {
+                crates.push((d.to_path_buf(), declared_features(f)));
+            }
+        }
+    }
 
     let mut out = Vec::new();
-    for f in files.iter().filter(|f| has_ext(f, "rs")) {
+    for f in files {
+        if !has_ext(f, "rs") {
+            continue;
+        }
         let text = read_text_lossy(f);
         let feats = nearest_features(f, &crates);
         for name in feature_names(&text) {
-            let declared = feats.map(|s| s.contains(&name)).unwrap_or(false);
+            let declared = match feats {
+                Some(s) => s.contains(&name),
+                None => false,
+            };
             if !declared {
                 out.push(Violation {
                     lint: "undeclared-cfg".to_string(),
@@ -492,6 +648,65 @@ fn lint_undeclared_cfg(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
 
 // --- drift-marker ---------------------------------------------------------
 
+fn should_scan_drift_file(f: &Path) -> bool {
+    has_ext(f, "rs")
+        || has_ext(f, "md")
+        || has_ext(f, "toml")
+        || has_ext(f, "txt")
+        || has_ext(f, "yml")
+        || has_ext(f, "yaml")
+        || has_ext(f, "sh")
+        || has_ext(f, "json")
+        || f.extension().is_none()
+}
+
+/// Check whether the slice immediately following a task/fixme keyword starts with `(#<digits>)`.
+#[must_use]
+pub const fn has_numeric_issue_link(after_bytes: &[u8]) -> bool {
+    let mut scan = after_bytes;
+    let mut state = 0u8;
+    while let &[b, ref tail @ ..] = scan {
+        match state {
+            0 => {
+                if is_ascii_ws(b) {
+                    scan = tail;
+                    continue;
+                }
+                if b == b'(' {
+                    state = 1;
+                    scan = tail;
+                    continue;
+                }
+                return false;
+            }
+            1 => {
+                if b == b'#' {
+                    state = 2;
+                    scan = tail;
+                    continue;
+                }
+                return false;
+            }
+            2 => {
+                if is_ascii_digit_byte(b) {
+                    state = 3;
+                    scan = tail;
+                    continue;
+                }
+                return false;
+            }
+            _ => {
+                if is_ascii_digit_byte(b) {
+                    scan = tail;
+                    continue;
+                }
+                return b == b')';
+            }
+        }
+    }
+    false
+}
+
 fn lint_drift_markers(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
     let task = needles::task_marker();
     let fixme = needles::fixme_marker();
@@ -499,38 +714,26 @@ fn lint_drift_markers(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
     let drift = needles::drift_marker();
     let extras = needles::extra_drift_markers();
 
-    // Notes hide in more than .rs/.md/.toml: plain-text, YAML, shell, JSON, and
-    // extension-less NOTES files all ship a checkpoint marker just as well.
-    // Files are read lossily (see `read_text_lossy`): a stray non-UTF-8 byte
-    // must never turn a note into an unscanned one.
-    let scan = |f: &&PathBuf| {
-        has_ext(f, "rs")
-            || has_ext(f, "md")
-            || has_ext(f, "toml")
-            || has_ext(f, "txt")
-            || has_ext(f, "yml")
-            || has_ext(f, "yaml")
-            || has_ext(f, "sh")
-            || has_ext(f, "json")
-            || f.extension().is_none()
-    };
-
     let mut out = Vec::new();
-    for f in files.iter().filter(scan) {
+    for f in files {
+        if !should_scan_drift_file(f) {
+            continue;
+        }
         let text = read_text_lossy(f);
         for (i, line) in text.lines().enumerate() {
+            let line_no = i.saturating_add(1);
             if line.contains(&incomplete) {
                 out.push(Violation {
                     lint: "drift-marker".to_string(),
                     path: rel(root, f),
-                    detail: format!("line {}: incomplete-checkpoint marker", i + 1),
+                    detail: format!("line {line_no}: incomplete-checkpoint marker"),
                 });
             }
             if line.contains(&drift) {
                 out.push(Violation {
                     lint: "drift-marker".to_string(),
                     path: rel(root, f),
-                    detail: format!("line {}: session-drift marker", i + 1),
+                    detail: format!("line {line_no}: session-drift marker"),
                 });
             }
             for tag in &extras {
@@ -538,32 +741,25 @@ fn lint_drift_markers(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
                     out.push(Violation {
                         lint: "drift-marker".to_string(),
                         path: rel(root, f),
-                        detail: format!("line {}: work-in-progress checkpoint marker", i + 1),
+                        detail: format!("line {line_no}: work-in-progress checkpoint marker"),
                     });
                 }
             }
             for kw in [&task, &fixme] {
-                // Every occurrence needs its own link, e.g. `(#123)` with a
-                // NUMERIC issue; `(#)` or `(#notanissue)` does not count.
-                let unlinked = line.match_indices(kw.as_str()).any(|(p, _)| {
-                    let after = &line[p + kw.len()..];
-                    let linked = after
-                        .trim_start()
-                        .strip_prefix("(#")
-                        .map(|r| {
-                            let num: String = r.chars().take_while(|c| *c != ')').collect();
-                            !num.is_empty() && num.chars().all(|c| c.is_ascii_digit())
-                        })
-                        .unwrap_or(false);
-                    !linked
-                });
+                let mut unlinked = false;
+                for (p, _) in line.match_indices(kw.as_str()) {
+                    let after = line.get(p.saturating_add(kw.len())..).unwrap_or("");
+                    if !has_numeric_issue_link(after.trim_start().as_bytes()) {
+                        unlinked = true;
+                        break;
+                    }
+                }
                 if unlinked {
                     out.push(Violation {
                         lint: "drift-marker".to_string(),
                         path: rel(root, f),
                         detail: format!(
-                            "line {}: task note without an issue link (use the form NAME(#123))",
-                            i + 1
+                            "line {line_no}: task note without an issue link (use the form NAME(#123))"
                         ),
                     });
                 }
@@ -575,20 +771,21 @@ fn lint_drift_markers(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
 
 // --- tautology ------------------------------------------------------------
 
-fn matching_delim(bytes: &[u8], open: usize, open_b: u8, close_b: u8) -> Option<usize> {
-    let mut depth = 0i32;
+#[must_use]
+pub const fn matching_delim(bytes: &[u8], open: usize, open_b: u8, close_b: u8) -> Option<usize> {
+    let mut depth = 0usize;
     let mut i = open;
     while i < bytes.len() {
         let c = bytes[i];
         if c == open_b {
-            depth += 1;
+            depth = depth.saturating_add(1);
         } else if c == close_b {
-            depth -= 1;
+            depth = depth.saturating_sub(1);
             if depth == 0 {
                 return Some(i);
             }
         }
-        i += 1;
+        i = i.saturating_add(1);
     }
     None
 }
@@ -602,13 +799,14 @@ const PRIMITIVE_TYPES: &[&str] = &[
 
 /// Length of the string literal starting at `b[i]` (which must be `"`), or
 /// `None` if unterminated. Handles `\"` escapes.
-fn string_literal_len(b: &[u8], i: usize) -> Option<usize> {
-    let mut j = i + 1;
+#[must_use]
+pub const fn string_literal_len(b: &[u8], i: usize) -> Option<usize> {
+    let mut j = i.saturating_add(1);
     while j < b.len() {
         match b[j] {
-            b'\\' => j += 2,
-            b'"' => return Some(j + 1 - i),
-            _ => j += 1,
+            b'\\' => j = j.saturating_add(2),
+            b'"' => return j.saturating_add(1).checked_sub(i),
+            _ => j = j.saturating_add(1),
         }
     }
     None
@@ -616,27 +814,34 @@ fn string_literal_len(b: &[u8], i: usize) -> Option<usize> {
 
 /// Length of the raw string literal whose `#`s or `"` start at `b[i]`
 /// (`r"..."`, `r#"..."#`), or `None` if unterminated.
-fn raw_string_len(b: &[u8], i: usize) -> Option<usize> {
-    let mut hashes = 0;
-    while i + hashes < b.len() && b[i + hashes] == b'#' {
-        hashes += 1;
+#[must_use]
+pub const fn raw_string_len(b: &[u8], i: usize) -> Option<usize> {
+    let mut hashes = 0usize;
+    let mut quote_pos = i;
+    while quote_pos < b.len() && b[quote_pos] == b'#' {
+        hashes = hashes.saturating_add(1);
+        quote_pos = quote_pos.saturating_add(1);
     }
-    if i + hashes >= b.len() || b[i + hashes] != b'"' {
+    if quote_pos >= b.len() || b[quote_pos] != b'"' {
         return None;
     }
-    let mut j = i + hashes + 1;
+    let mut j = quote_pos.saturating_add(1);
     while j < b.len() {
-        if b[j] == b'"'
-            && b[j + 1..]
-                .iter()
-                .take(hashes)
-                .filter(|c| **c == b'#')
-                .count()
-                == hashes
-        {
-            return Some(j + 1 + hashes - i);
+        if b[j] == b'"' {
+            let mut matched = 0usize;
+            let mut h_pos = j.saturating_add(1);
+            while matched < hashes {
+                if h_pos >= b.len() || b[h_pos] != b'#' {
+                    break;
+                }
+                matched = matched.saturating_add(1);
+                h_pos = h_pos.saturating_add(1);
+            }
+            if matched == hashes {
+                return j.saturating_add(1).saturating_add(hashes).checked_sub(i);
+            }
         }
-        j += 1;
+        j = j.saturating_add(1);
     }
     None
 }
@@ -644,27 +849,40 @@ fn raw_string_len(b: &[u8], i: usize) -> Option<usize> {
 /// Length of the char literal starting at `b[i]` (which must be `'`) —
 /// `'x'`, `'\n'`, `'\u{1F}'`, a multi-byte char — or `None` if this quote
 /// opens a lifetime (`'a`) rather than a literal.
-fn char_literal_len(b: &[u8], i: usize) -> Option<usize> {
-    let mut j = i + 1;
+#[must_use]
+pub const fn char_literal_len(b: &[u8], i: usize) -> Option<usize> {
+    let mut j = i.saturating_add(1);
     if j >= b.len() {
         return None;
     }
-    if b[j] == b'\\' {
-        j += 1;
+    let first = b[j];
+    if first == b'\\' {
+        j = j.saturating_add(1);
         // Escape: `\n`, `\'`, `\\`, `\x41`, `\u{...}` — scan to the closing quote.
-        while j < b.len() && b[j] != b'\'' {
-            j += 1;
+        while j < b.len() {
+            if b[j] == b'\'' {
+                return j.saturating_add(1).checked_sub(i);
+            }
+            j = j.saturating_add(1);
         }
-        return (j < b.len()).then_some(j + 1 - i);
+        return None;
     }
     // One UTF-8 scalar (1..=4 bytes) then the closing quote; otherwise a lifetime.
-    let width = match b[j] {
-        c if c < 0x80 => 1,
-        c if c >= 0xF0 => 4,
-        c if c >= 0xE0 => 3,
-        _ => 2,
+    let width = if first < 0x80 {
+        1usize
+    } else if first >= 0xF0 {
+        4
+    } else if first >= 0xE0 {
+        3
+    } else {
+        2
     };
-    (j + width < b.len() && b[j + width] == b'\'').then_some(j + width + 1 - i)
+    let close_idx = j.saturating_add(width);
+    if close_idx < b.len() && b[close_idx] == b'\'' {
+        close_idx.saturating_add(1).checked_sub(i)
+    } else {
+        None
+    }
 }
 
 /// True if `inner` (an assertion's argument list) is a constant expression: it
@@ -681,12 +899,11 @@ fn inner_is_constant(inner: &str) -> bool {
     let mut i = 0;
     let mut has_lit = false;
     let mut has_ident = false;
-    while i < b.len() {
-        let c = b[i];
+    while let Some(&c) = b.get(i) {
         if c == b'"' {
             has_lit = true;
             match string_literal_len(b, i) {
-                Some(n) => i += n,
+                Some(n) => i = i.saturating_add(n),
                 None => break,
             }
             continue;
@@ -695,41 +912,50 @@ fn inner_is_constant(inner: &str) -> bool {
             match char_literal_len(b, i) {
                 Some(n) => {
                     has_lit = true;
-                    i += n;
+                    i = i.saturating_add(n);
                 }
-                None => i += 1, // a lifetime tick; the name after it is scanned as a word
+                None => i = i.saturating_add(1), // a lifetime tick; the name after it is scanned as a word
             }
             continue;
         }
-        if c.is_ascii_digit() {
+        if is_ascii_digit_byte(c) {
             // One numeric literal incl. radix prefix, '.', '_', and type suffix.
             has_lit = true;
-            i += 1;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'.' || b[i] == b'_') {
-                i += 1;
+            i = i.saturating_add(1);
+            while let Some(&ch) = b.get(i) {
+                if is_ascii_alnum_byte(ch) || ch == b'.' || ch == b'_' {
+                    i = i.saturating_add(1);
+                } else {
+                    break;
+                }
             }
             continue;
         }
-        if c.is_ascii_alphabetic() || c == b'_' {
+        if is_ascii_alpha_byte(c) || c == b'_' {
             let start = i;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
-                i += 1;
+            while let Some(&ch) = b.get(i) {
+                if is_ascii_alnum_byte(ch) || ch == b'_' {
+                    i = i.saturating_add(1);
+                } else {
+                    break;
+                }
             }
-            // start..i sit on ASCII boundaries, so this slice is always valid.
-            let word = &inner[start..i];
+            let word = inner.get(start..i).unwrap_or("");
             // A string prefix (`b"..."`, `r"..."`, `br#"..."#`, `c"..."`) or a
             // byte-char prefix (`b'x'`) is part of the literal, not a symbol.
-            if i < b.len() && matches!(word, "b" | "r" | "br" | "c" | "cr") {
-                let len = match b[i] {
-                    b'"' if !word.contains('r') => string_literal_len(b, i),
-                    b'"' | b'#' => raw_string_len(b, i),
-                    b'\'' if word == "b" => char_literal_len(b, i),
-                    _ => None,
-                };
-                if let Some(n) = len {
-                    has_lit = true;
-                    i += n;
-                    continue;
+            if let Some(&next_b) = b.get(i) {
+                if matches!(word, "b" | "r" | "br" | "c" | "cr") {
+                    let len = match next_b {
+                        b'"' if !word.contains('r') => string_literal_len(b, i),
+                        b'"' | b'#' => raw_string_len(b, i),
+                        b'\'' if word == "b" => char_literal_len(b, i),
+                        _ => None,
+                    };
+                    if let Some(n) = len {
+                        has_lit = true;
+                        i = i.saturating_add(n);
+                        continue;
+                    }
                 }
             }
             match word {
@@ -740,7 +966,7 @@ fn inner_is_constant(inner: &str) -> bool {
             }
             continue;
         }
-        i += 1;
+        i = i.saturating_add(1);
     }
     !has_ident && has_lit
 }
@@ -755,19 +981,28 @@ fn body_is_tautological(body: &str) -> bool {
     let bytes = body.as_bytes();
     for macro_name in ["assert_eq!", "assert_ne!", "assert!"] {
         let mut idx = 0;
-        while let Some(pos) = body[idx..].find(macro_name) {
-            let after = idx + pos + macro_name.len();
+        while idx < body.len() {
+            let Some(rem) = body.get(idx..) else {
+                break;
+            };
+            let Some(pos) = rem.find(macro_name) else {
+                break;
+            };
+            let after = idx.saturating_add(pos).saturating_add(macro_name.len());
             idx = after;
-            let open = body.len() - body[after..].trim_start().len();
-            let close = match bytes.get(open) {
-                Some(b'(') => b')',
-                Some(b'[') => b']',
-                Some(b'{') => b'}',
+            let tail = body.get(after..).unwrap_or("");
+            let open = body.len().saturating_sub(tail.trim_start().len());
+            let (open_b, close) = match bytes.get(open) {
+                Some(&b'(') => (b'(', b')'),
+                Some(&b'[') => (b'[', b']'),
+                Some(&b'{') => (b'{', b'}'),
                 _ => continue,
             };
-            if let Some(end) = matching_delim(bytes, open, bytes[open], close) {
-                if inner_is_constant(&body[open + 1..end]) {
-                    return true;
+            if let Some(end) = matching_delim(bytes, open, open_b, close) {
+                if let Some(inner) = body.get(open.saturating_add(1)..end) {
+                    if inner_is_constant(inner) {
+                        return true;
+                    }
                 }
                 idx = end;
             }
@@ -779,30 +1014,168 @@ fn body_is_tautological(body: &str) -> bool {
 fn lint_tautological_tests(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
     let test_attr = "#[test]";
     let mut out = Vec::new();
-    for f in files.iter().filter(|f| has_ext(f, "rs")) {
+    for f in files {
+        if !has_ext(f, "rs") {
+            continue;
+        }
         let text = read_text_lossy(f);
         let bytes = text.as_bytes();
         let mut idx = 0;
-        while let Some(pos) = text[idx..].find(test_attr) {
-            let at = idx + pos;
-            if let Some(brace_rel) = text[at..].find('{') {
-                let bstart = at + brace_rel;
-                if let Some(bend) = matching_delim(bytes, bstart, b'{', b'}') {
-                    let body = &text[bstart + 1..bend];
-                    if body_is_tautological(body) {
-                        out.push(Violation {
-                            lint: "tautology".to_string(),
-                            path: rel(root, f),
-                            detail:
-                                "a test asserts only constant expressions (no symbol exercised)"
-                                    .to_string(),
-                        });
+        while idx < text.len() {
+            let Some(rem) = text.get(idx..) else {
+                break;
+            };
+            let Some(pos) = rem.find(test_attr) else {
+                break;
+            };
+            let at = idx.saturating_add(pos);
+            if let Some(at_rem) = text.get(at..) {
+                if let Some(brace_rel) = at_rem.find('{') {
+                    let bstart = at.saturating_add(brace_rel);
+                    if let Some(bend) = matching_delim(bytes, bstart, b'{', b'}') {
+                        if let Some(body) = text.get(bstart.saturating_add(1)..bend) {
+                            if body_is_tautological(body) {
+                                out.push(Violation {
+                                    lint: "tautology".to_string(),
+                                    path: rel(root, f),
+                                    detail:
+                                        "a test asserts only constant expressions (no symbol exercised)"
+                                            .to_string(),
+                                });
+                            }
+                        }
+                        idx = bend;
+                        continue;
                     }
-                    idx = bend;
-                    continue;
                 }
             }
-            idx = at + test_attr.len();
+            idx = at.saturating_add(test_attr.len());
+        }
+    }
+    out
+}
+
+// --- stock-lexable ---------------------------------------------------------
+
+/// Is `line` (trimmed) the head of a Clean island, `clean {`?
+fn opens_island(line: &str) -> bool {
+    match line.strip_prefix("clean") {
+        Some(rest) => rest.trim_start().starts_with('{'),
+        None => false,
+    }
+}
+
+/// Is `line` (trimmed) a bare Trust contract clause, written outside `contract_fn!`?
+fn bare_contract_clause(line: &str) -> bool {
+    line.starts_with("ensures ") || line.starts_with("requires ")
+}
+
+/// The module `line` (trimmed) declares out of line, if it names an island file:
+/// `mod <name>_island;`, any visibility.
+#[allow(clippy::question_mark)]
+fn island_mount(line: &str) -> Option<&str> {
+    let decl = match line.strip_prefix("pub") {
+        Some(rest) => {
+            let r = rest.trim_start();
+            r.strip_prefix("(crate)").unwrap_or(r).trim_start()
+        }
+        None => line,
+    };
+    let Some(after_mod) = decl.strip_prefix("mod ") else {
+        return None;
+    };
+    let Some(before_semi) = after_mod.trim().strip_suffix(';') else {
+        return None;
+    };
+    let name = before_semi.trim();
+    if name.ends_with("_island") {
+        Some(name)
+    } else {
+        None
+    }
+}
+
+/// Do the attribute lines directly above line `at` gate it on `cfg(clean_islands)`?
+fn gated_on_clean_islands(lines: &[&str], at: usize) -> bool {
+    let prefix = lines.get(..at).unwrap_or(&[]);
+    let mut idx = prefix.len();
+    while idx > 0 {
+        idx -= 1;
+        let Some(raw_attr) = prefix.get(idx) else {
+            break;
+        };
+        let attr = raw_attr.trim();
+        if !attr.starts_with("#[") {
+            break;
+        }
+        if attr.starts_with("#[cfg(")
+            && attr.contains("clean_islands")
+            && !attr.contains("not(clean_islands)")
+        {
+            return true;
+        }
+    }
+    false
+}
+
+/// A stock rustc opens every module a crate declares, cfg'd out or not, so the
+/// Trust-only surface lives where it never looks: an island in a `*_island.rs` file
+/// mounted under `#[cfg(clean_islands)]` (build.rs sets it only when the compiler
+/// answers that it is Trust), a contracted fn inside `contract_fn!` (whose stock arm
+/// drops the clause). Lexical, like the other lints: it reads lines, not syntax.
+fn lint_stock_lexable(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
+    let mut out = Vec::new();
+    for f in files {
+        if !has_ext(f, "rs") {
+            continue;
+        }
+        let island_file = match f.file_stem() {
+            Some(s) => match s.to_str() {
+                Some(stem) => stem.ends_with("_island"),
+                None => false,
+            },
+            None => false,
+        };
+        let text = read_text_lossy(f);
+        let mut lines: Vec<&str> = Vec::new();
+        for l in text.lines() {
+            lines.push(l);
+        }
+        for (i, raw) in lines.iter().enumerate() {
+            let line = raw.trim_start();
+            let line_no = i.saturating_add(1);
+            if !island_file && opens_island(line) {
+                out.push(Violation {
+                    lint: "stock-lexable".to_string(),
+                    path: rel(root, f),
+                    detail: format!(
+                        "line {line_no}: an inline `clean {{ … }}` island, which no stock rustc can lex: move it to a \
+                         `<module>_island.rs` file mounted under `#[cfg(clean_islands)]`"
+                    ),
+                });
+            }
+            if !island_file && bare_contract_clause(line) {
+                out.push(Violation {
+                    lint: "stock-lexable".to_string(),
+                    path: rel(root, f),
+                    detail: format!(
+                        "line {line_no}: a bare contract clause, which no stock rustc can parse: write the fn \
+                         through `contract_fn!` (`clauses [ensures …]`)"
+                    ),
+                });
+            }
+            if let Some(name) = island_mount(line) {
+                if !gated_on_clean_islands(&lines, i) {
+                    out.push(Violation {
+                        lint: "stock-lexable".to_string(),
+                        path: rel(root, f),
+                        detail: format!(
+                            "line {line_no}: `mod {name};` is not gated on `#[cfg(clean_islands)]`, so a stock \
+                             rustc opens the island"
+                        ),
+                    });
+                }
+            }
         }
     }
     out
@@ -815,23 +1188,25 @@ fn lint_verify_isolation(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
 
     // (1) A verify* workspace MEMBER (the explicit members list).
     let ws = root.join("Cargo.toml");
-    if let Ok(text) = fs::read_to_string(&ws) {
-        if let Ok(val) = text.parse::<toml::Value>() {
-            if let Some(members) = val
-                .get("workspace")
-                .and_then(|w| w.get("members"))
-                .and_then(|m| m.as_array())
-            {
-                for m in members {
-                    if let Some(s) = m.as_str() {
-                        if s.starts_with("verify") || s.contains("/verify") {
-                            out.push(Violation {
-                                lint: "verify-isolation".to_string(),
-                                path: "Cargo.toml".to_string(),
-                                detail: format!(
-                                    "verification member {s:?} must live in a SEPARATE workspace so it cannot break the substrate build"
-                                ),
-                            });
+    if let Ok(bytes) = fs::read(&ws) {
+        if let Ok(text) = core::str::from_utf8(&bytes) {
+            if let Ok(val) = text.parse::<toml::Value>() {
+                if let Some(wv) = val.get("workspace") {
+                    if let Some(mv) = wv.get("members") {
+                        if let Some(members) = mv.as_array() {
+                            for m in members {
+                                if let Some(s) = m.as_str() {
+                                    if s.starts_with("verify") || s.contains("/verify") {
+                                        out.push(Violation {
+                                            lint: "verify-isolation".to_string(),
+                                            path: "Cargo.toml".to_string(),
+                                            detail: format!(
+                                                "verification member {s:?} must live in a SEPARATE workspace so it cannot break the substrate build"
+                                            ),
+                                        });
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -843,7 +1218,10 @@ fn lint_verify_isolation(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
     // `verify-* = { path = "../verify-*" }` edge enters the build graph without
     // being a workspace member — the most natural way to reintroduce the exact
     // predecessor failure. Scan every manifest's dependency tables.
-    for f in files.iter().filter(|f| is_cargo_manifest(f)) {
+    for f in files {
+        if !is_cargo_manifest(f) {
+            continue;
+        }
         let text = read_text_lossy(f);
         let val = match text.parse::<toml::Value>() {
             Ok(v) => v,
@@ -853,32 +1231,41 @@ fn lint_verify_isolation(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
         let sects = ["dependencies", "dev-dependencies", "build-dependencies"];
         let mut tables = Vec::new();
         for sect in sects {
-            if let Some(t) = val.get(sect).and_then(|v| v.as_table()) {
-                tables.push((sect.to_string(), t));
+            if let Some(v) = val.get(sect) {
+                if let Some(t) = v.as_table() {
+                    tables.push((sect.to_string(), t));
+                }
             }
         }
-        if let Some(targets) = val.get("target").and_then(|v| v.as_table()) {
-            for (cfg, t) in targets {
-                for sect in sects {
-                    if let Some(d) = t.get(sect).and_then(|v| v.as_table()) {
-                        tables.push((format!("target.{cfg}.{sect}"), d));
+        if let Some(tv) = val.get("target") {
+            if let Some(targets) = tv.as_table() {
+                for (cfg, t) in targets {
+                    for sect in sects {
+                        if let Some(dv) = t.get(sect) {
+                            if let Some(d) = dv.as_table() {
+                                tables.push((format!("target.{cfg}.{sect}"), d));
+                            }
+                        }
                     }
                 }
             }
         }
         for (sect, tbl) in tables {
             for (name, spec) in tbl {
-                let path_basename_is_verify = spec
-                    .as_table()
-                    .and_then(|s| s.get("path"))
-                    .and_then(|p| p.as_str())
-                    .map(|p| {
-                        p.rsplit(['/', '\\'])
-                            .next()
-                            .unwrap_or(p)
-                            .starts_with("verify")
-                    })
-                    .unwrap_or(false);
+                let path_basename_is_verify = match spec.as_table() {
+                    Some(s) => match s.get("path") {
+                        Some(pv) => match pv.as_str() {
+                            Some(p) => p
+                                .rsplit(['/', '\\'])
+                                .next()
+                                .unwrap_or(p)
+                                .starts_with("verify"),
+                            None => false,
+                        },
+                        None => false,
+                    },
+                    None => false,
+                };
                 if name.starts_with("verify") || path_basename_is_verify {
                     out.push(Violation {
                         lint: "verify-isolation".to_string(),
@@ -911,7 +1298,7 @@ fn lint_doc_tamper(root: &Path) -> Vec<Violation> {
         Err(_) => return out,
     };
     let expected = render::render_block(&m);
-    let readme = fs::read_to_string(&readme_path).unwrap_or_default();
+    let readme = read_text_lossy(&readme_path);
     match render::extract(&readme) {
         None => out.push(Violation {
             lint: "doc-tamper".to_string(),
@@ -924,8 +1311,9 @@ fn lint_doc_tamper(root: &Path) -> Vec<Violation> {
             // while the renderer always emits `\n` — the same block, different
             // bytes. Normalizing both sides keeps the lint about tamper (claim
             // drift), which is what it exists to catch; a real edit still fails.
-            let normalize = |s: &str| s.replace("\r\n", "\n");
-            if normalize(&actual).trim() != normalize(&expected).trim() {
+            let actual_norm = actual.replace("\r\n", "\n");
+            let expected_norm = expected.replace("\r\n", "\n");
+            if actual_norm.trim() != expected_norm.trim() {
                 out.push(Violation {
                     lint: "doc-tamper".to_string(),
                     path: "README.md".to_string(),
@@ -952,21 +1340,37 @@ const NOOP_PROGRAMS: &[&str] = &["true", ":", "echo", "printf", "cat", "head", "
 
 /// `[package].name` of a Cargo manifest, if it is a package (not a bare
 /// workspace root).
+#[allow(clippy::question_mark, clippy::manual_map)]
 fn package_name(cargo_toml: &Path) -> Option<String> {
-    let text = fs::read_to_string(cargo_toml).ok()?;
-    let val = text.parse::<toml::Value>().ok()?;
-    val.get("package")?
-        .get("name")?
-        .as_str()
-        .map(|s| s.to_string())
+    let Ok(bytes) = fs::read(cargo_toml) else {
+        return None;
+    };
+    let Ok(text) = core::str::from_utf8(&bytes) else {
+        return None;
+    };
+    let Ok(val) = text.parse::<toml::Value>() else {
+        return None;
+    };
+    let Some(pkg) = val.get("package") else {
+        return None;
+    };
+    let Some(name) = pkg.get("name") else {
+        return None;
+    };
+    match name.as_str() {
+        Some(s) => Some(s.to_string()),
+        None => None,
+    }
 }
 
 /// Map every crate name in the tree to its directory.
 fn crate_dirs(files: &[PathBuf]) -> std::collections::HashMap<String, PathBuf> {
     let mut map = std::collections::HashMap::new();
-    for f in files.iter().filter(|f| is_cargo_manifest(f)) {
-        if let (Some(name), Some(dir)) = (package_name(f), f.parent()) {
-            map.insert(name, dir.to_path_buf());
+    for f in files {
+        if is_cargo_manifest(f) {
+            if let (Some(name), Some(dir)) = (package_name(f), f.parent()) {
+                map.insert(name, dir.to_path_buf());
+            }
         }
     }
     map
@@ -993,27 +1397,34 @@ fn cargo_target_exists(
             Some(dir) => dir.join(kind).join(&file).exists(),
             None => true,
         },
-        None => crates
-            .values()
-            .any(|dir| dir.join(kind).join(&file).exists()),
+        None => {
+            for dir in crates.values() {
+                if dir.join(kind).join(&file).exists() {
+                    return true;
+                }
+            }
+            false
+        }
     }
 }
 
 /// Why a claim's command does not fit its declared kind, if it does not. The
 /// runner judges a claim by its kind, so the command must be the shape that
 /// judgement assumes: a `test` claim passes on libtest's counted results (so
-/// it must be `cargo test`), a `build` claim on a compile (`cargo build` /
-/// `cargo check`), a `selftest` on a pinned output hash. A claim of another
-/// shape under one of these kinds would be judged by a check that cannot bite.
+/// it must be `targo <lane> test`), a `build` claim on a compile (`targo
+/// <lane> build` / `check`), a `selftest` on a pinned output hash. A claim of
+/// another shape under one of these kinds would be judged by a check that
+/// cannot bite.
 fn kind_shape_violation(kind: &str, command: &str, has_sha: bool) -> Option<String> {
-    let sub = cargo_subcommand(command);
+    let sub = targo_subcommand(command);
     match kind {
         "test" if sub != Some("test") => Some(format!(
             "kind = \"test\" claims pass on libtest's counted results, so the command must be \
-             `cargo test ...`; got {command:?}"
+             `targo --unverified test ...` (or `targo trust test ...`); got {command:?}"
         )),
         "build" if !matches!(sub, Some("build") | Some("check")) => Some(format!(
-            "kind = \"build\" claims must run `cargo build ...` or `cargo check ...`; got {command:?}"
+            "kind = \"build\" claims must run `targo --unverified build|check ...` (or `targo \
+             trust build|check ...`); got {command:?}"
         )),
         "selftest" if !has_sha => Some(
             "selftest claim pins no expected_output_sha — output drift would never be detected"
@@ -1021,6 +1432,64 @@ fn kind_shape_violation(kind: &str, command: &str, has_sha: bool) -> Option<Stri
         ),
         _ => None,
     }
+}
+
+/// Stock Rust toolchain programs. astream builds, tests and runs on the Trust
+/// toolchain (`targo`, `trustc`), so a claim that reaches for one of these
+/// asserts something about a compiler the project does not ship with.
+const STOCK_PROGRAMS: &[&str] = &[
+    "cargo",
+    "rustc",
+    "rustdoc",
+    "rustup",
+    "rustfmt",
+    "cargo-clippy",
+    "clippy-driver",
+];
+
+/// Targo verbs that compile, and so must name a lane: a bare `targo build`
+/// is refused and a bare `targo run` proceeds unverified without anyone
+/// having chosen that, and a nested `targo` does not inherit its parent's
+/// lane either way.
+const LANE_VERBS: &[&str] = &[
+    "build", "check", "test", "run", "bench", "doc", "install", "rustc",
+];
+
+/// Why a claim command's toolchain use is wrong, if it is: a step (the
+/// command is split on `&&`, the only chaining the masking rule allows) that
+/// runs a stock toolchain program, selects a rustup toolchain with
+/// `+toolchain`, or runs a compiling targo verb without naming its lane.
+fn toolchain_violation(command: &str) -> Option<String> {
+    for step in command.split("&&") {
+        let step = step.trim();
+        let prog = command_program(step).unwrap_or("");
+        if STOCK_PROGRAMS.contains(&prog) {
+            return Some(format!(
+                "runs the stock Rust toolchain (`{prog}`): claims build and run on the Trust \
+                 toolchain — `targo --unverified <verb>` or `targo trust <verb>`; got {command:?}"
+            ));
+        }
+        let Some(call) = targo_call(step) else {
+            continue;
+        };
+        if let Some(sel) = call.toolchain {
+            return Some(format!(
+                "`{sel}` selects a rustup toolchain; a Trust claim selects a lane ({}), not a \
+                 toolchain; got {command:?}",
+                TARGO_LANES.join(" / ")
+            ));
+        }
+        if let (None, Some(verb)) = (call.lane, call.verb) {
+            if LANE_VERBS.contains(&verb) {
+                return Some(format!(
+                    "`targo {verb}` names no lane: a nested targo does not inherit one, so the \
+                     command must say `targo --unverified {verb}` or `targo trust {verb}`; got \
+                     {command:?}"
+                ));
+            }
+        }
+    }
+    None
 }
 
 /// The first shell construct in `command` (run as `sh -c`) that can turn a
@@ -1034,12 +1503,11 @@ fn status_masking_operator(command: &str) -> Option<&'static str> {
     let b = command.as_bytes();
     let (mut single, mut double) = (false, false);
     let mut i = 0;
-    while i < b.len() {
-        let c = b[i];
+    while let Some(&c) = b.get(i) {
         if single {
             single = c != b'\'';
         } else if c == b'\\' {
-            i += 1; // outside single quotes the next byte is literal
+            i = i.saturating_add(1); // outside single quotes the next byte is literal
         } else if double {
             double = c != b'"';
         } else {
@@ -1048,15 +1516,15 @@ fn status_masking_operator(command: &str) -> Option<&'static str> {
                 b'"' => double = true,
                 b';' => return Some("`;`"),
                 b'\n' => return Some("a newline"),
-                b'|' if b.get(i + 1) == Some(&b'|') => return Some("`||`"),
+                b'|' if b.get(i.saturating_add(1)) == Some(&b'|') => return Some("`||`"),
                 b'|' => return Some("a pipe `|`"),
-                b'&' if b.get(i + 1) == Some(&b'&') => i += 1,
-                b'&' if i > 0 && matches!(b[i - 1], b'>' | b'<') => {}
+                b'&' if b.get(i.saturating_add(1)) == Some(&b'&') => i = i.saturating_add(1),
+                b'&' if i > 0 && matches!(b.get(i - 1), Some(b'>' | b'<')) => {}
                 b'&' => return Some("a background `&`"),
                 _ => {}
             }
         }
-        i += 1;
+        i = i.saturating_add(1);
     }
     None
 }
@@ -1088,7 +1556,10 @@ fn lint_manifest_integrity(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
 
     for claim in &m.claim {
         let cmd = claim.command.trim();
-        let toks: Vec<&str> = cmd.split_whitespace().collect();
+        let mut toks: Vec<&str> = Vec::new();
+        for tok in cmd.split_whitespace() {
+            toks.push(tok);
+        }
         let here = format!("evidence/manifest.toml [{}]", claim.id);
 
         if toks.is_empty() {
@@ -1128,13 +1599,21 @@ fn lint_manifest_integrity(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
                 detail,
             });
         }
+        if let Some(detail) = toolchain_violation(cmd) {
+            out.push(Violation {
+                lint: "manifest-integrity".to_string(),
+                path: here.clone(),
+                detail,
+            });
+        }
         if let Some(op) = status_masking_operator(cmd) {
             out.push(Violation {
                 lint: "manifest-integrity".to_string(),
                 path: here.clone(),
                 detail: format!(
-                    "command uses {op}, which can discard a failing exit status (`cargo test ... \
-                     || true` exits 0 whatever the tests did); chain steps with `&&`"
+                    "command uses {op}, which can discard a failing exit status (`targo \
+                     --unverified test ... || true` exits 0 whatever the tests did); chain steps \
+                     with `&&`"
                 ),
             });
         }
@@ -1158,10 +1637,12 @@ fn lint_manifest_integrity(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
         // targets and -p packages. Leading `VAR=value` assignments are the
         // program's environment, not paths the claim cites.
         let mut pkg: Option<&str> = None;
-        let mut i = toks.iter().take_while(|t| is_env_assignment(t)).count();
-        while i < toks.len() {
-            let t = toks[i];
-            let next = toks.get(i + 1).copied();
+        let mut i = 0usize;
+        while i < toks.len() && is_env_assignment(toks[i]) {
+            i = i.saturating_add(1);
+        }
+        while let Some(&t) = toks.get(i) {
+            let next = toks.get(i.saturating_add(1)).copied();
             match t {
                 "-p" | "--package" => {
                     if let Some(name) = next {
@@ -1173,7 +1654,7 @@ fn lint_manifest_integrity(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
                                 detail: format!("cites unknown crate {name:?} (-p)"),
                             });
                         }
-                        i += 2;
+                        i = i.saturating_add(2);
                         continue;
                     }
                 }
@@ -1193,7 +1674,7 @@ fn lint_manifest_integrity(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
                                 ),
                             });
                         }
-                        i += 2;
+                        i = i.saturating_add(2);
                         continue;
                     }
                 }
@@ -1207,7 +1688,7 @@ fn lint_manifest_integrity(root: &Path, files: &[PathBuf]) -> Vec<Violation> {
                     }
                 }
             }
-            i += 1;
+            i = i.saturating_add(1);
         }
     }
     out
@@ -1334,14 +1815,69 @@ mod tests {
 
     #[test]
     fn kind_shape_rules() {
-        assert!(kind_shape_violation("test", "cargo test --locked -p x", false).is_none());
-        assert!(kind_shape_violation("test", "sh -c true", false).is_some());
-        assert!(kind_shape_violation("test", "cargo run --example x", false).is_some());
-        assert!(kind_shape_violation("build", "cargo build --locked --workspace", false).is_none());
-        assert!(kind_shape_violation("build", "cargo check --locked", false).is_none());
-        assert!(kind_shape_violation("build", "cargo --version", false).is_some());
-        assert!(kind_shape_violation("selftest", "cargo run --example r", true).is_none());
-        assert!(kind_shape_violation("selftest", "cargo run --example r", false).is_some());
-        assert!(kind_shape_violation("bench", "BENCH_N=5 cargo run --example b", false).is_none());
+        let shape = |kind, cmd, sha| kind_shape_violation(kind, cmd, sha);
+        assert!(shape("test", "targo --unverified test --locked -p x", false).is_none());
+        assert!(shape("test", "targo trust test --locked -p x", false).is_none());
+        assert!(shape("test", "sh -c true", false).is_some());
+        assert!(shape("test", "targo --unverified run --example x", false).is_some());
+        // The stock driver is not a test run, whatever its verb.
+        assert!(shape("test", "cargo test --locked -p x", false).is_some());
+        assert!(shape(
+            "build",
+            "targo --unverified build --locked --workspace",
+            false
+        )
+        .is_none());
+        assert!(shape("build", "targo trust check --locked", false).is_none());
+        assert!(shape("build", "targo --version", false).is_some());
+        assert!(shape("build", "cargo build --locked", false).is_some());
+        assert!(shape("selftest", "targo --unverified run --example r", true).is_none());
+        assert!(shape("selftest", "targo --unverified run --example r", false).is_some());
+        assert!(shape(
+            "bench",
+            "BENCH_N=5 targo --unverified run --example b",
+            false
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn toolchain_rules() {
+        let flagged =
+            |cmd, needle: &str| toolchain_violation(cmd).is_some_and(|d| d.contains(needle));
+        // Stock programs, also behind env assignments and in a later `&&` step.
+        assert!(flagged(
+            "cargo test --locked",
+            "stock Rust toolchain (`cargo`)"
+        ));
+        assert!(flagged("BENCH_N=5 /usr/bin/cargo run", "(`cargo`)"));
+        assert!(flagged("rustc --version", "(`rustc`)"));
+        assert!(flagged("rustup run stable cargo test", "(`rustup`)"));
+        assert!(flagged(
+            "targo --unverified build --locked && cargo test --locked",
+            "(`cargo`)"
+        ));
+        // A rustup toolchain selector is not a lane.
+        assert!(flagged(
+            "targo +nightly --unverified test",
+            "`+nightly` selects"
+        ));
+        // A compiling verb must name its lane; fmt/tippy/metadata take none.
+        assert!(flagged("targo test --locked", "`targo test` names no lane"));
+        assert!(flagged("X=1 targo run -p x", "`targo run` names no lane"));
+        assert!(flagged(
+            "targo --unverified test -p a && targo test -p b",
+            "names no lane"
+        ));
+        for fine in [
+            "targo --unverified test --locked -p x",
+            "targo trust check -p x",
+            "BENCH_N=5 targo --unverified run --quiet --release -p x --example b",
+            "targo --unverified test -p a && targo trust test -p b",
+            "targo fmt --all -- --check",
+            "sh scripts/x.sh",
+        ] {
+            assert!(toolchain_violation(fine).is_none(), "{fine:?} is fine");
+        }
     }
 }

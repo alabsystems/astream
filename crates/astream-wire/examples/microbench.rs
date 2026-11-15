@@ -6,7 +6,7 @@
 //! with the broker, on disclosed hardware, in a later phase.
 //!
 //! Run with `--release` for representative numbers:
-//!   cargo run --release -p astream-wire --example microbench
+//!   targo --unverified run --release -p astream-wire --example microbench
 
 use astream_wire::{crc32_ieee, Filter, Frame, Subject};
 use std::hint::black_box;

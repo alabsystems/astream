@@ -1,0 +1,13 @@
+[package]
+name = "astream-coalesce-1"
+description = "An independent model of Macaroon discharge, Last radix cursors, SIGMA identity binding, damage coalescing, and restart fences (shard 1 of 6, batches 49..50); no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-digest = { workspace = true }

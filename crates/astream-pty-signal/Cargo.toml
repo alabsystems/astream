@@ -1,0 +1,11 @@
+[package]
+name = "astream-pty-signal"
+description = "An independent model of a POSIX PTY `TIOCSWINSZ` resize coalescer, `termios` `ECHO` password-prompt detector, foreground `tcgetpgrp` observer, ordered `SIGHUP`->`SIGTERM`->`SIGKILL` reaper, master-fd backpressure, and `FD_CLOEXEC` hygiene; no astream runtime crate and no aterm code calls it. astream's shipped PTY host is `astream-host`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

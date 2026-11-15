@@ -49,7 +49,7 @@ fn oracle(clock: u64, rand: u64, bytes: &[u8]) -> u64 {
 }
 
 /// Replay `tape` against `path` and report whether it ABORTED (a panic caught by
-/// `catch_unwind`, fail-closed like `ReplaySeam`). A machinery `Err` is NOT an
+/// `catch_unwind`, fail-closed). A machinery `Err` is NOT an
 /// abort — it fails the test loudly instead.
 fn replay_aborts(path: &str, tape: &EffectsLog) -> bool {
     match std::panic::catch_unwind(|| foreign::replay(path, tape)) {
@@ -118,7 +118,7 @@ fn a_short_tape_aborts_replay_fail_closed() {
     short.0.truncate(1);
     assert!(
         replay_aborts(&path, &short),
-        "a short tape must abort replay (fail-closed, like ReplaySeam)"
+        "a short tape must abort replay (fail-closed)"
     );
 }
 
@@ -138,7 +138,7 @@ fn a_wrong_kind_tape_aborts_replay_fail_closed() {
     );
     assert!(
         replay_aborts(&path, &swapped),
-        "a wrong-kind tape must abort replay (fail-closed, like ReplaySeam)"
+        "a wrong-kind tape must abort replay (fail-closed)"
     );
 
     // A tape recorded against a different file name: the File record's path

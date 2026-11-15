@@ -1,0 +1,12 @@
+[package]
+name = "astream-wan-delta"
+description = "An independent model of a low-bandwidth WAN terminal delta transport: blank/uniform-SGR cell run-length encoding, per-row FNV-1a dirty bitmaps, RTT-adaptive FPS governing, single-loss XOR FEC parity shards, cursor-only fast-path frames, and path-MTU coalescing; no astream runtime crate and no aterm code calls it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }

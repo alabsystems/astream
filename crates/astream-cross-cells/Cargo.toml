@@ -1,0 +1,12 @@
+[package]
+name = "astream-cross-cells"
+description = "An independent model of the `aterm` 5-target cross-cell (`stock-check.sh` / `aterm-verify`) matrix tracker, `ring` `links` override pin, `-D warnings` zero-finding gate, `^trust:` exclusion check, Windows Unix-target scoping, and `0/1/2` exit triad; no astream runtime crate and no aterm code calls it. aterm's cross cells are its own `aterm-verify` code, and astream's are `scripts/stock-check.sh`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

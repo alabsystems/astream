@@ -16,7 +16,7 @@ astream-effects = { path = "../astream-effects" }
 
 # The one platform dependency, behind the workspace's only `unsafe` (the sys and
 # foreign cordon modules). libc is already a normal dependency in the locked
-# graph (via sha2 -> cpufeatures), so this adds zero new crates to the
+# graph (via astream-aead's getrandom), so this adds zero new crates to the
 # reproducible build. cfg(unix)-gated so other targets never see it.
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

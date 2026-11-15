@@ -1,0 +1,12 @@
+[package]
+name = "astream-sim-fabric"
+description = "An independent model of a deterministic SplitMix64 fabric simulation packet scheduler, asymmetric network-partition matrix, `F_BARRIERFSYNC` power-loss epoch cutter, synthetic week-long retention bound mirror, partial-order history checker, and fault-schedule minimizer; no astream runtime crate and no aterm code calls it. astream's shipped crash and power-loss simulation is `astream-broker`'s `crash_sim.rs` and `power_loss.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

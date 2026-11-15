@@ -1,0 +1,11 @@
+[package]
+name = "astream-metal-damage"
+description = "An independent model of a macOS Metal terminal dirty-row damage bitset, 120Hz ProMotion adaptive frame pacer, 3-slot `MTLBuffer` in-flight ring, keystroke-reset cursor blink FSM, crisp procedural U+2500..U+259F box-drawing router, and luminance contrast floor; no astream runtime crate and no aterm code calls it. aterm's renderer is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

@@ -1,0 +1,12 @@
+[package]
+name = "astream-held-compactor"
+description = "An independent model of a crash-safe `<log>.held` `SLACK_DIV = 4` byte-cut planner, `2x` churn rewrite trigger, `Response::Gap` (`0x87`) range/count ledger, restart-durable first-seen stamps, person-vs-node mail hold policy, and `<log>.compact` intent FSM; no astream runtime crate and no aterm code calls it. The shipped held store is `astream-broker`'s `held.rs`, `retention.rs` (`SLACK_DIV`) and `compact.rs`, its gap notice is `proto.rs`'s `Response::Gap`, and aterm's mail hold rules are `aterm-link`'s `broker_rules.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "astream-self-restart"
+description = "An independent model of an `aterm ctl @self restart` handoff seal gate, `pid=` vs `supervisor=` validator, `(conv_id, cwd, argv)` resume pin, restart-storm breaker, agent-vs-Mac `NEEDS YOU` classifier, and in-flight task drain; no astream runtime crate and no aterm code calls it. `aterm ctl @self restart` is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

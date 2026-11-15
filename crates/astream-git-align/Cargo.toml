@@ -1,0 +1,12 @@
+[package]
+name = "astream-git-align"
+description = "An independent model of a bidirectional `git fetch && git rebase origin/main` divergence planner, pre-rebase file-disjointness fence, `aterm` `[OB-1]` vendored-crate drift auditor, `--locked` Cargo.lock guard, session-owned untracked sweep, and signed release manifests; no astream runtime crate and no aterm code calls it. aterm's `[OB-1]` audit and its pin rules are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

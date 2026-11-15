@@ -1,11 +1,22 @@
 [package]
 name = "astream-kafka"
-description = "astream Kafka wire-protocol codec (codec only, not yet wired): a std-only encoder/decoder for the Kafka request/response framing, ApiVersions and Metadata (v0), proven at the byte level. Nothing listens for Kafka clients yet -- the broker accept path speaks astream Frames, not Kafka framing; wiring, and the Produce/Fetch data path (record-batch v2), are the next increments. Zero third-party deps, forbid(unsafe)."
+description = "astream Kafka wire-protocol codec, multi-partition RecordBatch v2 + CRC-32C store, consumer-group coordinator, and live TCP KafkaServer (std-only by default; optional `durable` feature backs multi-partition logs and consumer-group state on astream-broker::ShardedBroker). Zero third-party deps, forbid(unsafe)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
-# Zero third-party deps — std-only codec. (No Kafka client lib; this IS the wire.)
+[features]
+default = []
+durable = ["dep:astream-broker", "dep:astream-wire"]
+aead = ["dep:astream-aead", "astream-aead/stream"]
+handshake = ["aead", "astream-aead/handshake"]
+identity = ["handshake", "astream-aead/identity"]
+
+# Zero third-party deps by default — std-only codec + `astream-digest`; optional `astream-broker` durability + optional `astream-aead` encrypted listeners.
 [dependencies]
+astream-digest.workspace = true
+astream-aead = { workspace = true, optional = true }
+astream-broker = { path = "../astream-broker", optional = true }
+astream-wire = { path = "../astream-wire", optional = true }

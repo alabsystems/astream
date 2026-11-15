@@ -22,11 +22,11 @@
 //! whoever held control when it was applied. So the log's `In`-client-id sequence
 //! **is** the control history — replayable and forkable like everything else.
 //!
-//! HONEST BOUNDARY: enforcement is at the engine's token-taking ingest
-//! (`apply_input_as` / `apply_input_caused_as`). The plain [`Session::apply_input`]
-//! takes no token — it is the single-writer path a host uses when there is no
-//! shared keyboard — and the host `Driver` still calls that one; routing the host
-//! driver through the token is a follow-up in the host crate.
+//! HONEST BOUNDARY: enforcement is at the token-taking ingest
+//! (`apply_input_as` / `apply_input_caused_as` on `Session`, and
+//! `drive_input_as` / `drive_input_caused_as` on `astream-host::Driver`). The
+//! plain [`Session::apply_input`] (and `Driver::drive_input`) takes no token —
+//! it is the single-writer path a host uses when there is no shared keyboard.
 //!
 //! [`Session::apply_input_as`]: crate::Session::apply_input_as
 //! [`Session::apply_input`]: crate::Session::apply_input
@@ -34,6 +34,29 @@
 //! [`claim`]: ControlToken::claim
 
 use crate::log::EngineError;
+
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "control_island.rs"]
+mod control_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::control_handoff_holder;
+#[cfg(clean_islands)]
+pub use control_island::control_handoff_holder;
+
+contract_fn! {
+    /// Kernel-certified single-writer holder check (`client == holder`).
+    ///
+    /// Discharged in the Clean CIC kernel by definitional equality against
+    /// `holder_matches_isl` (`clean-kernel-defeq`).
+    #[must_use]
+    pub const fn holder_matches(holder: u64, client: u64) -> bool
+    clauses [ensures result == (client == holder)]
+    {
+        client == holder
+    }
+}
 
 /// The single-writer control token for one session. Deliberately not `Copy` or
 /// `Clone`: one token, one holder, one writer — a second writer cannot be
@@ -50,31 +73,31 @@ pub struct ControlToken {
 
 impl ControlToken {
     /// A token initially held by `holder` (e.g. the orchestrator).
-    pub fn new(holder: u64) -> ControlToken {
+    pub const fn new(holder: u64) -> ControlToken {
         ControlToken { holder }
     }
 
     /// The client currently allowed to write.
-    pub fn holder(&self) -> u64 {
+    pub const fn holder(&self) -> u64 {
         self.holder
     }
 
     /// Whether `client` may write — true iff it holds control. Every other
     /// client is read-only.
-    pub fn may_write(&self, client: u64) -> bool {
-        client == self.holder
+    pub const fn may_write(&self, client: u64) -> bool {
+        holder_matches(self.holder, client)
     }
 
     /// Whether `client` is currently read-only (the negation of [`may_write`]).
     ///
     /// [`may_write`]: ControlToken::may_write
-    pub fn is_read_only(&self, client: u64) -> bool {
+    pub const fn is_read_only(&self, client: u64) -> bool {
         !self.may_write(client)
     }
 
     /// `Ok(())` iff `client` holds control, else [`EngineError::NotHolder`] naming
     /// the actual holder — the check the engine's ingest applies.
-    pub fn check(&self, client: u64) -> Result<(), EngineError> {
+    pub const fn check(&self, client: u64) -> Result<(), EngineError> {
         if self.may_write(client) {
             Ok(())
         } else {
@@ -88,17 +111,19 @@ impl ControlToken {
     /// Hand control from `by` to `to`. Only the holder can hand off: if `by` does
     /// not hold control this is [`EngineError::NotHolder`] and the holder is
     /// unchanged. (Handing off to oneself is a no-op `Ok`.)
-    pub fn grant(&mut self, by: u64, to: u64) -> Result<(), EngineError> {
-        self.check(by)?;
-        self.holder = to;
+    pub const fn grant(&mut self, by: u64, to: u64) -> Result<(), EngineError> {
+        if let Err(e) = self.check(by) {
+            return Err(e);
+        }
+        self.holder = control_handoff_holder(self.holder, to);
         Ok(())
     }
 
     /// Seize control for `client`, whoever holds it — the explicit override a
     /// human uses to claim the keyboard from an orchestrator. Unconditional by
     /// design; the seizure is visible in the log as the next `In`'s `client_id`.
-    pub fn claim(&mut self, client: u64) {
-        self.holder = client;
+    pub const fn claim(&mut self, client: u64) {
+        self.holder = control_handoff_holder(self.holder, client);
     }
 }
 

@@ -1,0 +1,11 @@
+[package]
+name = "astream-smt-governor"
+description = "An independent model of a per-crate `I * D` Clean/SMT shard complexity estimator, Z3 `wall-backstop == 0` watchdog, `verify-ready.sh` monotone 80% floor ratchet, upstream `OD-1` allowlist fence, `astream-wire` `unknown == 0` invariant gate, and `VERIFY_JOBS` slot pool; no astream runtime crate and no aterm code calls it, and `scripts/verify-ready.sh`, the shipped gate, does not use it. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

@@ -10,17 +10,52 @@
 use crate::record::Record;
 use crate::screen::{fold, Screen};
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "perceive_island.rs"]
+mod perceive_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::perceive_clamp_take_count;
+#[cfg(clean_islands)]
+pub use perceive_island::perceive_clamp_take_count;
+
+contract_fn! {
+    /// Kernel-certified bounds check that a screen row index `row` lies strictly
+    /// within the grid height `rows` (`row < rows`).
+    ///
+    /// Discharged in the Clean CIC kernel by definitional equality against
+    /// `perceive_row_in_bounds_isl` (`clean-kernel-defeq`).
+    #[must_use]
+    pub const fn perceive_row_in_bounds(row: u16, rows: u16) -> bool
+    clauses [ensures result == (row < rows)]
+    {
+        row < rows
+    }
+}
+
 /// The screen as of offset `k`: fold of `records[0..=k]` (later records are not
 /// applied). This is what makes every read below time-addressable.
 pub fn frame(cols: u16, rows: u16, records: &[Record], k: usize) -> Screen {
-    let take = k.saturating_add(1).min(records.len());
-    fold(cols, rows, &records[..take])
+    let req = k.saturating_add(1);
+    let take = if req <= records.len() {
+        req
+    } else {
+        records.len()
+    };
+    fold(cols, rows, records.get(..take).unwrap_or(&[]))
 }
 
 /// The screen as lines of text (trailing blanks trimmed per row).
 pub fn text(screen: &Screen) -> Vec<String> {
     let (_, rows) = screen.dims();
-    (0..rows).map(|r| screen.line_text(r)).collect()
+    let mut out = Vec::with_capacity(rows as usize);
+    let mut r = 0u16;
+    while perceive_row_in_bounds(r, rows) {
+        out.push(screen.line_text(r));
+        r = r.saturating_add(1);
+    }
+    out
 }
 
 /// A maximal run of consecutive non-empty rows — a text region. (Prompt-aware
@@ -47,8 +82,8 @@ pub fn blocks(screen: &Screen) -> Vec<Block> {
             if let Some(s) = start.take() {
                 out.push(Block {
                     top: s,
-                    bottom: r - 1,
-                    lines: lines[s as usize..r as usize].to_vec(),
+                    bottom: r.saturating_sub(1),
+                    lines: lines.get(s as usize..r as usize).unwrap_or(&[]).to_vec(),
                 });
             }
         } else if start.is_none() {
@@ -58,8 +93,8 @@ pub fn blocks(screen: &Screen) -> Vec<Block> {
     if let Some(s) = start {
         out.push(Block {
             top: s,
-            bottom: lines.len() as u16 - 1,
-            lines: lines[s as usize..].to_vec(),
+            bottom: (lines.len() as u16).saturating_sub(1),
+            lines: lines.get(s as usize..).unwrap_or(&[]).to_vec(),
         });
     }
     out
@@ -89,17 +124,24 @@ pub fn search(screen: &Screen, needle: &str) -> Vec<Hit> {
     for (r, line) in text(screen).iter().enumerate() {
         let mut from = 0usize; // byte offset into `line`
         let mut col = 0u16; // character column of `from`
-        while let Some(pos) = line[from..].find(needle) {
+        while let Some(rem) = line.get(from..) {
+            let Some(pos) = rem.find(needle) else {
+                break;
+            };
             // Count only the characters skipped since the last hit, so a row full
             // of matches is scanned once, not once per match.
-            col += line[from..from + pos].chars().count() as u16;
+            let prefix_chars = match line.get(from..from.saturating_add(pos)) {
+                Some(s) => s.chars().count() as u16,
+                None => 0,
+            };
+            col = col.saturating_add(prefix_chars);
             out.push(Hit {
                 row: r as u16,
                 col,
                 len,
             });
-            col += len;
-            from += pos + needle.len();
+            col = col.saturating_add(len);
+            from = from.saturating_add(pos).saturating_add(needle.len());
         }
     }
     out

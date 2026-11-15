@@ -1,5 +1,7 @@
 # INTENTIONAL VIOLATION FIXTURE (scanned by the gate test only): a lockfile
 # whose resolved graph contains a git source.
+# This is lockfile data, not a buildable package: the lockfile lint scans it
+# independently of a Cargo.toml, including when no manifest accompanies it.
 version = 4
 
 [[package]]

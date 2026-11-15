@@ -4,7 +4,7 @@
 //! throughput over a Unix socket, single producer (the strictest, fairest workload
 //! to compare against another bus at equal durability).
 //!
-//!   cargo run --release -p astream-broker --example broker_microbench
+//!   targo --unverified run --release -p astream-broker --example broker_microbench
 
 #[cfg(unix)]
 use astream_broker::{Broker, Client};

@@ -1,0 +1,12 @@
+[package]
+name = "astream-macos-tcc"
+description = "An independent model of a macOS TCC privacy-consent folder/volume fence, cross-app `defaults`/container guard, `EPERM` privacy classifier, `syspolicyd=stuck` deadlock detector, live `~/.local/bin/aterm` overwrite blocker, and FDA epoch tracker; no astream runtime crate and no aterm code calls it. aterm's privacy, `syspolicyd` and install guards are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

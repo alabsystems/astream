@@ -1,4 +1,4 @@
-//! A driver over astream-wire's REAL public API — the stock-toolchain companion to the Trust
+//! A driver over astream-wire's REAL public API — the unverified-lane companion to the Trust
 //! verification survey (`scripts/verify-trust.sh`, captured in evidence/verify/trust-wire.md).
 //!
 //! The obligations the Trust verifier discharges (or refuses) for astream-wire are generated
@@ -6,8 +6,8 @@
 //! mirror of it, which would stay "proved" whatever the real guard did. This example carries
 //! no logic of its own. It exists so that the functions the survey is about — the real `Frame`,
 //! `Offset`, `assign_partition`, `Subject` / `Filter` and the table-driven CRC — are exercised
-//! end to end on the guarded paths the survey's obligations come from, under the stock
-//! toolchain (`cargo run -p astream-wire --example verify_core`). A renamed or removed
+//! end to end on the guarded paths the survey's obligations come from, in the unverified
+//! lane (`targo --unverified run -p astream-wire --example verify_core`). A renamed or removed
 //! function breaks this driver; a weakened guard shows up in its printed lines.
 //!
 //! What it prints is a small deterministic exercise of each guarded path; it is NOT the

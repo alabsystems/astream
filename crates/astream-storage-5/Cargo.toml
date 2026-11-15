@@ -1,0 +1,11 @@
+[package]
+name = "astream-storage-5"
+description = "An independent model of at-rest AAD log binding, inbox cursor fencing, and crash-safe journal compaction (shard 5 of 6, batches 105..106); no astream runtime crate and no aterm code calls it. aterm's banners and `syspolicyd` guard are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

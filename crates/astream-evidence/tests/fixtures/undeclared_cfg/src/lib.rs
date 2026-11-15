@@ -1,6 +1,6 @@
 // INTENTIONAL VIOLATION FIXTURE (not compiled; scanned by the gate test).
 // `ghost` is referenced but never declared in Cargo.toml [features] — exactly
-// the predecessor's `cloud-dropbox` -> `cloud-Andrew Yates` dead-code class.
+// the predecessor's feature-name-typo dead-code class.
 
 #[cfg(feature = "ghost")]
 pub fn ghost() {}

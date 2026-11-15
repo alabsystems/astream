@@ -42,6 +42,31 @@ use astream_term::{Folder, Record, Screen};
 use astream_wire::Offset;
 use std::collections::HashMap;
 
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "session_island.rs"]
+mod session_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::session_bump_high_water;
+#[cfg(clean_islands)]
+pub use session_island::session_bump_high_water;
+
+contract_fn! {
+    /// Kernel-certified exactly-once deduplication check: returns `true` iff
+    /// `client_seq` is at or below the client's recorded `high_water`
+    /// (`client_seq <= high_water`).
+    ///
+    /// Discharged in the Clean CIC kernel by definitional equality against
+    /// `session_seq_is_duplicate_isl` (`clean-kernel-defeq`).
+    #[must_use]
+    pub const fn session_seq_is_duplicate(client_seq: u64, high_water: u64) -> bool
+    clauses [ensures result == (client_seq <= high_water)]
+    {
+        client_seq <= high_water
+    }
+}
+
 /// A materialized `/a/state`: the folded screen as of [`folded_through`], with
 /// full parser state so resume is exact.
 ///
@@ -53,24 +78,35 @@ pub struct StateSnapshot {
 }
 
 impl StateSnapshot {
+    pub(crate) const fn from_parts(folded_through: Option<Offset>, folder: Folder) -> Self {
+        Self {
+            folded_through,
+            folder,
+        }
+    }
+
+    pub(crate) fn clone_folder(&self) -> Folder {
+        self.folder.clone()
+    }
+
     /// The screen as of the snapshot offset.
-    pub fn screen(&self) -> &Screen {
+    pub const fn screen(&self) -> &Screen {
         self.folder.screen()
     }
 
     /// The last offset this snapshot incorporates, or `None` if it folded no
     /// record at all (a snapshot of an empty log). Never beyond what was folded.
-    pub fn folded_through(&self) -> Option<Offset> {
+    pub const fn folded_through(&self) -> Option<Offset> {
         self.folded_through
     }
 
     /// The offset a client tails the log from: the one after
     /// [`folded_through`](Self::folded_through), or [`Offset::ZERO`] when
     /// nothing was folded.
-    pub fn next_offset(&self) -> Offset {
+    pub const fn next_offset(&self) -> Offset {
         match self.folded_through {
             // A folded offset came from a record index, so it is far below u64::MAX.
-            Some(k) => k.checked_next().unwrap_or(Offset(u64::MAX)),
+            Some(k) => Offset(k.0.saturating_add(1)),
             None => Offset::ZERO,
         }
     }
@@ -78,11 +114,20 @@ impl StateSnapshot {
 
 /// The number of leading records `records[..n]` to fold for a snapshot through
 /// `folded_through`, clamped to what exists.
-fn prefix_len(records: &[Record], folded_through: Offset) -> usize {
-    usize::try_from(folded_through.0)
-        .ok()
-        .and_then(|k| k.checked_add(1))
-        .map_or(records.len(), |n| n.min(records.len()))
+const fn prefix_len(records: &[Record], folded_through: Offset) -> usize {
+    if folded_through.0 >= records.len() as u64 {
+        records.len()
+    } else {
+        (folded_through.0 as usize) + 1
+    }
+}
+
+const fn folded_through_of_prefix(take: usize) -> Option<Offset> {
+    if take > 0 {
+        Some(Offset((take - 1) as u64))
+    } else {
+        None
+    }
 }
 
 /// Materialize `/a/state` by folding `records[0..=folded_through]`. Records are a
@@ -100,11 +145,11 @@ pub fn materialize(
 ) -> StateSnapshot {
     let mut folder = Folder::new(cols, rows);
     let take = prefix_len(records, folded_through);
-    for rec in &records[..take] {
+    for rec in records.iter().take(take) {
         folder.apply(rec);
     }
     StateSnapshot {
-        folded_through: take.checked_sub(1).map(|i| Offset(i as u64)),
+        folded_through: folded_through_of_prefix(take),
         folder,
     }
 }
@@ -152,7 +197,7 @@ pub fn high_water_from_log(records: &[Record]) -> HashMap<u64, u64> {
 
 fn bump_high_water(hw: &mut HashMap<u64, u64>, client_id: u64, client_seq: u64) {
     hw.entry(client_id)
-        .and_modify(|h: &mut u64| *h = (*h).max(client_seq))
+        .and_modify(|h: &mut u64| *h = session_bump_high_water(*h, client_seq))
         .or_insert(client_seq);
 }
 
@@ -162,16 +207,18 @@ fn bump_high_water(hw: &mut HashMap<u64, u64>, client_id: u64, client_seq: u64) 
 pub struct Session<E: Effects> {
     log: Log,
     fx: E,
-    high_water: HashMap<u64, u64>,
+    high_water: Option<HashMap<u64, u64>>,
+    last_in: Option<Offset>,
 }
 
 impl<E: Effects> Session<E> {
     /// A fresh session with an empty log.
-    pub fn new(fx: E) -> Session<E> {
+    pub const fn new(fx: E) -> Session<E> {
         Session {
-            log: Log::new(),
+            log: Log::EMPTY,
             fx,
-            high_water: HashMap::new(),
+            high_water: None,
+            last_in: None,
         }
     }
 
@@ -181,11 +228,12 @@ impl<E: Effects> Session<E> {
     /// records the high-water came from — appending `seq 0` after `seq n-1`
     /// is exactly the corruption every reader stops at. To continue a recovered
     /// log in place, use [`resume_from`](Self::resume_from).
-    pub fn with_high_water(fx: E, high_water: HashMap<u64, u64>) -> Session<E> {
+    pub const fn with_high_water(fx: E, high_water: HashMap<u64, u64>) -> Session<E> {
         Session {
-            log: Log::new(),
+            log: Log::EMPTY,
             fx,
-            high_water,
+            high_water: Some(high_water),
+            last_in: None,
         }
     }
 
@@ -204,16 +252,13 @@ impl<E: Effects> Session<E> {
         let mut high_water = HashMap::new();
         let mut next = Offset::ZERO;
         let mut last_ts: Option<u64> = None;
+        let mut last_in: Option<Offset> = None;
         let mut reader = Log::read_from(fx.disk(), Offset::ZERO);
-        for item in &mut reader {
+        while let Some(item) = reader.next_metadata() {
             let env = item?;
-            if let Record::In {
-                client_id,
-                client_seq,
-                ..
-            } = env.record
-            {
+            if let Some((client_id, client_seq)) = env.input_key() {
                 bump_high_water(&mut high_water, client_id, client_seq);
+                last_in = Some(env.seq);
             }
             last_ts = Some(last_ts.map_or(env.ts_logical, |t| t.max(env.ts_logical)));
             next = env.seq.checked_next().ok_or(ReadError::OffsetOverflow)?;
@@ -228,13 +273,22 @@ impl<E: Effects> Session<E> {
         Ok(Session {
             log: Log::at(next),
             fx,
-            high_water,
+            high_water: Some(high_water),
+            last_in,
         })
     }
 
     /// The offset the next appended record will be assigned.
-    pub fn next_offset(&self) -> Offset {
+    pub const fn next_offset(&self) -> Offset {
         self.log.next_offset()
+    }
+
+    /// The offset of the most recent [`Record::In`] committed in this session
+    /// (including one recovered by [`resume_from`](Self::resume_from)), or `None`
+    /// if no input has been recorded yet. Used by a live PTY host (`Driver`) to
+    /// stamp same-log `caused_by` on `Record::Out` chunks read after an input.
+    pub const fn last_in_offset(&self) -> Option<Offset> {
+        self.last_in
     }
 
     /// Whether an input proposal would be a duplicate — `client_seq` at or below
@@ -250,9 +304,11 @@ impl<E: Effects> Session<E> {
     /// so use [`precheck_input`](Self::precheck_input), which also checks those,
     /// and then a commit after delivery cannot fail.
     pub fn is_duplicate(&self, client_id: u64, client_seq: u64) -> bool {
-        self.high_water
-            .get(&client_id)
-            .is_some_and(|h| client_seq <= *h)
+        let Some(hw) = &self.high_water else {
+            return false;
+        };
+        hw.get(&client_id)
+            .is_some_and(|h| session_seq_is_duplicate(client_seq, *h))
     }
 
     /// The full pre-delivery check for an input proposal of `body_len` bytes:
@@ -267,14 +323,72 @@ impl<E: Effects> Session<E> {
         client_seq: u64,
         body_len: usize,
     ) -> Result<bool, EngineError> {
+        self.precheck_input_with(client_id, client_seq, body_len, None)
+    }
+
+    /// [`precheck_input`](Self::precheck_input) gated by the session's
+    /// [`ControlToken`]: a non-holder is refused with [`EngineError::NotHolder`]
+    /// **before** any side effect (such as a PTY write) or dedup check runs.
+    pub fn precheck_input_as(
+        &self,
+        token: &ControlToken,
+        client_id: u64,
+        client_seq: u64,
+        body_len: usize,
+    ) -> Result<bool, EngineError> {
+        token.check(client_id)?;
+        self.precheck_input_with(client_id, client_seq, body_len, None)
+    }
+
+    /// [`precheck_input`](Self::precheck_input) for a proposal carrying a durable
+    /// [`CausedBy`] pointer: also checks same-log cause ordering
+    /// ([`EngineError::CauseNotEarlier`]) and cause-block encodability up front.
+    pub fn precheck_input_caused(
+        &self,
+        client_id: u64,
+        client_seq: u64,
+        body_len: usize,
+        caused_by: CausedBy,
+    ) -> Result<bool, EngineError> {
+        self.precheck_input_with(client_id, client_seq, body_len, Some(caused_by))
+    }
+
+    /// [`precheck_input_caused`](Self::precheck_input_caused) gated by the
+    /// session's [`ControlToken`].
+    pub fn precheck_input_caused_as(
+        &self,
+        token: &ControlToken,
+        client_id: u64,
+        client_seq: u64,
+        body_len: usize,
+        caused_by: CausedBy,
+    ) -> Result<bool, EngineError> {
+        token.check(client_id)?;
+        self.precheck_input_with(client_id, client_seq, body_len, Some(caused_by))
+    }
+
+    fn precheck_input_with(
+        &self,
+        client_id: u64,
+        client_seq: u64,
+        body_len: usize,
+        caused_by: Option<CausedBy>,
+    ) -> Result<bool, EngineError> {
         if self.is_duplicate(client_id, client_seq) {
             return Ok(false);
         }
-        Envelope::check_in_encodable(body_len, None).map_err(EngineError::Envelope)?;
-        self.log
-            .next_offset()
-            .checked_next()
-            .ok_or(EngineError::OffsetOverflow)?;
+        let seq = self.log.next_offset();
+        if let Some(CausedBy {
+            partition: None,
+            offset,
+        }) = caused_by
+        {
+            if !crate::log::log_same_log_cause_valid(offset, seq.0) {
+                return Err(EngineError::CauseNotEarlier { cause: offset, seq });
+            }
+        }
+        Envelope::check_in_encodable(body_len, caused_by).map_err(EngineError::Envelope)?;
+        seq.checked_next().ok_or(EngineError::OffsetOverflow)?;
         Ok(true)
     }
 
@@ -373,7 +487,10 @@ impl<E: Effects> Session<E> {
             },
             caused_by,
         )?;
-        self.high_water.insert(client_id, client_seq);
+        self.high_water
+            .get_or_insert_with(HashMap::new)
+            .insert(client_id, client_seq);
+        self.last_in = Some(off);
         Ok(Some(off))
     }
 

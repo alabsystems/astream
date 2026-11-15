@@ -1,0 +1,12 @@
+[package]
+name = "astream-speculative-echo"
+description = "An independent model of the 0-RTT `SpeculativeTerminal` cooked-shell line predictor, `ProgramPredictor` deterministic rule learner, POSIX `ECHOCTL` caret expander, `>= 0.80` watermark-squash hit-rate gate, tentative underline span, and divergence rollback; no astream runtime crate and no aterm code calls it. The shipped `SpeculativeTerminal` and `ProgramPredictor` are `astream-term`'s `program_predict.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

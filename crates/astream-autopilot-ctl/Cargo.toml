@@ -1,0 +1,12 @@
+[package]
+name = "astream-autopilot-ctl"
+description = "An independent model of the `aterm` Autopilot `cruise`/`land` 6-spoke prompt rotator, duplicate-reply loop breaker, `Nothing left:` clean-git verifier, 10-minute human-turn yield, `@<sid>:<rev>` worker await, and strict `ATERM-TASK-DONE` gate; no astream runtime crate and no aterm code calls it. aterm's Autopilot is aterm's own code, `aterm-agent`'s harness. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

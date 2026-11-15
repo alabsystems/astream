@@ -1,0 +1,11 @@
+[package]
+name = "astream-routing-4"
+description = "An independent model of subject trie routing, federation split-horizon, and causal watermark scheduling (shard 4 of 6, batches 91..92); no astream runtime crate and no aterm code calls it. aterm's mail on its bus is `aterm-link`'s, and its `restart` verb is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

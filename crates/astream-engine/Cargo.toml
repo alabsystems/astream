@@ -8,6 +8,7 @@ authors.workspace = true
 rust-version.workspace = true
 
 [dependencies]
+astream-digest = { workspace = true }
 astream-wire = { workspace = true }
 astream-term = { path = "../astream-term" }
 

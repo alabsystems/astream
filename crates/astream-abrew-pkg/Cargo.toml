@@ -1,0 +1,12 @@
+[package]
+name = "astream-abrew-pkg"
+description = "An independent model of `atpkg` / `abrew` content-addressed bottle SHA-256 verification, stale `trust` rustup link repair planner, `brew --real` bypass refusal, `Brewfile` topological sorting, active `aterm` binary overwrite shield, and compiler lane probing; no astream runtime crate and no aterm code calls it. atpkg and abrew are aterm's own code, its `atpkg` crate. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

@@ -5,25 +5,25 @@
 project = "fixture-kind-shape"
 
 [[claim]]
-id = "test.not.cargo.test"
+id = "test.not.targo.test"
 kind = "test"
 text = "Strict durability survives kill -9."
 command = "sh -c true"
 
 [[claim]]
-id = "build.not.cargo.build"
+id = "build.not.targo.build"
 kind = "build"
 text = "Clean checkout builds."
-command = "cargo --version"
+command = "targo --version"
 
 [[claim]]
 id = "selftest.unpinned"
 kind = "selftest"
 text = "A deterministic command's output is pinned."
-command = "cargo run --locked --example replay"
+command = "targo --unverified run --locked --example replay"
 
 [[claim]]
 id = "shaped.fine"
 kind = "test"
 text = "A well-shaped claim is not flagged by the shape rule."
-command = "cargo test --locked --lib frame"
+command = "targo --unverified test --locked --lib frame"

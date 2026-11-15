@@ -1,0 +1,13 @@
+[package]
+name = "astream-fabric-ops"
+description = "An independent model of fabric operational routing, prefix-indexed Last scanning, presence leases, barrier quorum routing, CRC32 binary payload chunking, cruise cadence control, and RFC 6962 Merkle audit proofs; no astream runtime crate and no aterm code calls it. The shipped `Last` index is `astream-broker`'s (`store.rs`, `last_view.rs`), aterm's presence and barriers are `aterm-link`'s, and its `cruise` cadence is aterm's Autopilot, in `aterm-agent`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-digest = { workspace = true }

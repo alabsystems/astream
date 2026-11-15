@@ -5,7 +5,7 @@
 //! borrowed record (no clone-to-deliver). Records/sec here is the delivery hot path,
 //! separate from the publish/durability path.
 //!
-//!   BENCH_N=20000 BODY=256 cargo run --release -p astream-broker --example broker_replay_bench
+//!   BENCH_N=20000 BODY=256 targo --unverified run --release -p astream-broker --example broker_replay_bench
 
 #[cfg(unix)]
 use astream_broker::{Broker, Client};

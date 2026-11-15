@@ -1,0 +1,11 @@
+[package]
+name = "astream-worktree-sync"
+description = "An independent model of multi-agent isolated worktree file-claim leases, rebase-and-test merge queue, `free>=room` LRU build-cache reclamation, macOS `syspolicyd=stuck` circuit breaker, TCC protected-folder path guard, and ticket-ordered `.cargo-build` lock fairness; no astream runtime crate and no aterm code calls it. aterm's `free>=room`, `syspolicyd=stuck` and build-cache cleanup are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

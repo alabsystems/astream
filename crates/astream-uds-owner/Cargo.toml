@@ -1,0 +1,11 @@
+[package]
+name = "astream-uds-owner"
+description = "An independent model of the `astream-sys` `owner_private` ACL-before-mode evaluator, `O_NONBLOCK` FIFO hang guard, `Links::Refuse` symlink blocker, `geteuid` owner check, strict `0600`/`0700` permission mask, and Darwin `ENOTSUP` `dir_flush_unavailable` classifier; no astream runtime crate and no aterm code calls it. It depends only on `astream-wire` and judges plain integers; the shipped check is `astream-sys`'s `owner_private`, proved by `os.cordon` and `cap.secret-file-owner-only`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

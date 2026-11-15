@@ -1,4 +1,5 @@
 #![forbid(unsafe_code)]
+#![allow(clippy::manual_range_contains)]
 //! `astream-live` — the live-capture bridge: a real Anthropic Messages turn becomes
 //! a unified four-stream session that replays through the in-tree substrate.
 //!
@@ -6,7 +7,7 @@
 //! call, so its output differs run to run and can never be a green (SHA-pinned)
 //! claim — but the two deterministic halves *are* gated: the response-format
 //! **parse** ([`parse_completion`]) and the **replay** of a captured turn (via
-//! `astream_agent::replay_session`). `cargo test -p astream-live` proves both with a
+//! `astream_agent::replay_session`). `targo --unverified test -p astream-live` proves both with a
 //! real-format fixture. The live half runs over either of TWO non-hermetic paths,
 //! both `#[ignore]`-gated: [`capture_live`] (a key-gated `curl` to the Messages
 //! API) or [`capture_via_cli`] (the authenticated `claude` CLI — **no key
@@ -28,7 +29,21 @@
 //! the live call shells out via `std::process` (`curl` / `claude`), so this crate
 //! joins the workspace without diluting astream's reproducible-build graph.
 
+// A contracted fn is written once, through `contract_fn!`: under a Trust compiler
+// (`cfg(clean_islands)`, build.rs) it carries its `ensures` clause, which no stock rustc can
+// parse, and every other compiler gets the plain fn.
+#[macro_use]
+#[path = "../../astream-wire/contract_fn.rs"]
+mod contract_fn;
+
+// Plain-Rust twins of the functions this crate's Clean islands compile, for a compiler
+// that cannot lex the islands.
+#[cfg(any(test, not(clean_islands)))]
+mod twins;
+
 pub mod json;
+pub mod sse_stream;
+pub use json::{json_clamp_depth, json_depth_within_max};
 
 use astream_agent::cog::{CogRecord, StopReason, ToolUse};
 use astream_agent::unified::Event;
@@ -46,7 +61,8 @@ pub fn parse_completion(response: &str) -> Result<CogRecord, String> {
         .ok_or("response has no `content` array")?;
     let mut text = String::new();
     let mut calls = Vec::new();
-    for block in content {
+    let mut rest = content;
+    while let [block, tail @ ..] = rest {
         match block.get("type").and_then(Json::as_str) {
             Some("text") => {
                 if let Some(t) = block.get("text").and_then(Json::as_str) {
@@ -70,6 +86,7 @@ pub fn parse_completion(response: &str) -> Result<CogRecord, String> {
             }
             _ => {}
         }
+        rest = tail;
     }
     let stop = match v.get("stop_reason").and_then(Json::as_str) {
         Some("tool_use") => StopReason::ToolUse,
@@ -84,7 +101,10 @@ pub fn parse_completion(response: &str) -> Result<CogRecord, String> {
 /// a quote or newline would break out of the surrounding JSON — producing
 /// invalid, non-round-trippable bytes on the durable log.
 fn json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 2);
+    const HEX: [char; 16] = [
+        '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'a', 'b', 'c', 'd', 'e', 'f',
+    ];
+    let mut out = String::with_capacity(64);
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
@@ -94,7 +114,12 @@ fn json_escape(s: &str) -> String {
             '\t' => out.push_str("\\t"),
             '\u{08}' => out.push_str("\\b"),
             '\u{0c}' => out.push_str("\\f"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04x}", c as u32)),
+            c if (c as u32) < 0x20 => {
+                let b = (c as u32) as usize;
+                out.push_str("\\u00");
+                out.push(HEX[(b >> 4) & 0xF]);
+                out.push(HEX[b & 0xF]);
+            }
             c => out.push(c),
         }
     }
@@ -112,32 +137,40 @@ fn render_input(input: Option<&Json>) -> Vec<u8> {
         match j {
             Json::Null => out.push_str("null"),
             Json::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
-            Json::Num(n) => out.push_str(n),
+            Json::Num(n) => out.push_str(n.as_str()),
             Json::Str(s) => {
                 out.push('"');
-                out.push_str(&json_escape(s));
+                out.push_str(&json_escape(s.as_str()));
                 out.push('"');
             }
             Json::Arr(a) => {
                 out.push('[');
-                for (i, e) in a.iter().enumerate() {
-                    if i > 0 {
+                let mut rest = a.as_slice();
+                let mut first = true;
+                while let [e, tail @ ..] = rest {
+                    if !first {
                         out.push(',');
                     }
+                    first = false;
                     write(out, e);
+                    rest = tail;
                 }
                 out.push(']');
             }
             Json::Obj(entries) => {
                 out.push('{');
-                for (i, (k, val)) in entries.iter().enumerate() {
-                    if i > 0 {
+                let mut rest = entries.as_slice();
+                let mut first = true;
+                while let [(k, val), tail @ ..] = rest {
+                    if !first {
                         out.push(',');
                     }
+                    first = false;
                     out.push('"');
-                    out.push_str(&json_escape(k));
+                    out.push_str(&json_escape(k.as_str()));
                     out.push_str("\":");
                     write(out, val);
+                    rest = tail;
                 }
                 out.push('}');
             }
@@ -168,14 +201,19 @@ pub fn unified_from_capture(
     is_error: bool,
     clock: u64,
 ) -> Vec<Event> {
+    const TOTAL_STEPS: u64 = 5;
+    let mut out = Vec::with_capacity(5);
     let (tool_id, cmd) = match &completion {
-        CogRecord::Completion { calls, .. } => calls
-            .first()
-            .map(|c| (c.id.clone(), c.input.clone()))
-            .unwrap_or_default(),
+        CogRecord::Completion { calls, .. } => {
+            if let Some(c) = calls.first() {
+                (c.id.clone(), c.input.clone())
+            } else {
+                (String::new(), Vec::new())
+            }
+        }
         _ => (String::new(), Vec::new()),
     };
-    vec![
+    let candidates = [
         Event::Cognition(completion),
         Event::In(cmd),
         Event::Effect(EffectRecord::Clock(clock)),
@@ -185,18 +223,48 @@ pub fn unified_from_capture(
             content: tool_output.as_bytes().to_vec(),
             is_error,
         }),
-    ]
+    ];
+    let mut step = 0u64;
+    for ev in candidates {
+        let next_step = live_bridge_advance_step(step, step.saturating_add(1));
+        if live_bridge_step_in_bounds(next_step, TOTAL_STEPS) {
+            out.push(ev);
+            step = next_step;
+        }
+    }
+    out
 }
 
 /// Strip an optional ```json … ``` markdown fence the model may wrap output in,
 /// so a fenced completion still parses.
 fn strip_fences(s: &str) -> &str {
     let t = s.trim();
-    let t = t
-        .strip_prefix("```json")
-        .or_else(|| t.strip_prefix("```"))
-        .unwrap_or(t);
-    t.strip_suffix("```").unwrap_or(t).trim()
+    let t = if let Some(rest) = t.strip_prefix("```json") {
+        rest
+    } else if let Some(rest) = t.strip_prefix("```") {
+        rest
+    } else {
+        t
+    };
+    let t = match t.strip_suffix("```") {
+        Some(rest) => rest,
+        None => t,
+    };
+    t.trim()
+}
+
+fn utf8_lossy_clean(bytes: &[u8]) -> String {
+    if let Ok(s) = core::str::from_utf8(bytes) {
+        return s.to_owned();
+    }
+    let mut out = String::new();
+    for chunk in bytes.utf8_chunks() {
+        out.push_str(chunk.valid());
+        if !chunk.invalid().is_empty() {
+            out.push('\u{FFFD}');
+        }
+    }
+    out
 }
 
 /// Capture ONE real model turn via the authenticated `claude` CLI — **no API key
@@ -210,34 +278,52 @@ fn strip_fences(s: &str) -> &str {
 /// `tool_use` block is model-authored prose in that shape, not an API-emitted
 /// block. Shells out via `std::process` (zero new deps).
 pub fn capture_via_cli(task: &str) -> Result<CogRecord, String> {
-    let prompt = format!(
-        "You are an assistant with a `bash` tool. Respond with ONLY a raw JSON object \
-         (no markdown fences, no prose) in EXACTLY this Anthropic Messages API response shape: \
-         {{\"content\":[{{\"type\":\"text\",\"text\":\"<one short sentence of reasoning>\"}},\
-         {{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"bash\",\
-         \"input\":{{\"command\":\"<a single shell command>\"}}}}],\"stop_reason\":\"tool_use\"}}. \
-         The task: {task}"
-    );
-    let out = std::process::Command::new("claude")
-        .args(["-p", &prompt, "--output-format", "json"])
+    const PREFIX: &str = "You are an assistant with a `bash` tool. Respond with ONLY a raw JSON object (no markdown fences, no prose) in EXACTLY this Anthropic Messages API response shape: {\"content\":[{\"type\":\"text\",\"text\":\"<one short sentence of reasoning>\"},{\"type\":\"tool_use\",\"id\":\"toolu_01\",\"name\":\"bash\",\"input\":{\"command\":\"<a single shell command>\"}}],\"stop_reason\":\"tool_use\"}. The task: ";
+    let mut prompt = String::new();
+    prompt.push_str(PREFIX);
+    prompt.push_str(task);
+    let out = match std::process::Command::new("claude")
+        .args(["-p", prompt.as_str(), "--output-format", "json"])
         .output()
-        .map_err(|e| format!("claude cli: {e}"))?;
+    {
+        Ok(v) => v,
+        Err(e) => return Err(format!("claude cli: {e}")),
+    };
     if !out.status.success() {
-        return Err(format!(
-            "claude cli failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        let stderr = utf8_lossy_clean(out.stderr.as_slice());
+        let mut msg = String::new();
+        msg.push_str("claude cli failed: ");
+        msg.push_str(stderr.as_str());
+        return Err(msg);
     }
     // The CLI may print a one-time notice line before the JSON result object; skip
     // to the first `{` so a preamble doesn't break the parse.
-    let raw = String::from_utf8_lossy(&out.stdout);
+    let raw = utf8_lossy_clean(out.stdout.as_slice());
     let start = raw.find('{').ok_or("claude cli produced no JSON result")?;
-    let wrapper = json::parse(raw[start..].trim_end())?;
+    let tail = raw
+        .get(start..)
+        .ok_or("claude cli produced no JSON result")?;
+    let wrapper = json::parse(tail.trim_end())?;
     let result = wrapper
         .get("result")
         .and_then(Json::as_str)
         .ok_or("claude cli output has no `result` string")?;
     parse_completion(strip_fences(result))
+}
+
+#[must_use]
+pub const fn valid_curl_key(key: &str) -> bool {
+    let mut rest = key.as_bytes();
+    if rest.is_empty() {
+        return false;
+    }
+    while let &[b, ref tail @ ..] = rest {
+        if !(b >= 0x21 && b <= 0x7E && b != b'"' && b != b'\\') {
+            return false;
+        }
+        rest = tail;
+    }
+    true
 }
 
 /// Capture ONE real turn from the Anthropic Messages API (key-gated, non-hermetic).
@@ -246,17 +332,17 @@ pub fn capture_via_cli(task: &str) -> Result<CogRecord, String> {
 /// inject further curl directives; real keys are printable ASCII without either,
 /// so anything else is refused rather than escaped.
 fn curl_key_header(key: &str) -> Result<String, String> {
-    if key.is_empty()
-        || !key
-            .bytes()
-            .all(|b| b.is_ascii_graphic() && b != b'"' && b != b'\\')
-    {
+    if !valid_curl_key(key) {
         return Err(
             "ANTHROPIC_API_KEY must be non-empty printable ASCII with no quote or backslash"
                 .to_string(),
         );
     }
-    Ok(format!("header = \"x-api-key: {key}\"\n"))
+    let mut out = String::new();
+    out.push_str("header = \"x-api-key: ");
+    out.push_str(key);
+    out.push_str("\"\n");
+    Ok(out)
 }
 
 /// Shells out to `curl` so no HTTP/TLS crate is pulled in. Returns the completion as
@@ -265,24 +351,26 @@ pub fn capture_live(prompt: &str, model: &str) -> Result<CogRecord, String> {
     use std::io::Write;
     use std::process::Stdio;
 
-    let key =
-        std::env::var("ANTHROPIC_API_KEY").map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
+    let Ok(key) = std::env::var("ANTHROPIC_API_KEY") else {
+        return Err("ANTHROPIC_API_KEY not set".to_string());
+    };
     // Both interpolated values are JSON-escaped: an unescaped `model` (or prompt)
     // containing a quote would corrupt the request body (JSON injection).
-    let body = format!(
-        concat!(
-            "{{\"model\":\"{}\",\"max_tokens\":1024,",
-            "\"tools\":[{{\"name\":\"bash\",\"description\":\"run a shell command\",",
-            "\"input_schema\":{{\"type\":\"object\",\"properties\":{{\"command\":{{\"type\":\"string\"}}}},\"required\":[\"command\"]}}}}],",
-            "\"messages\":[{{\"role\":\"user\",\"content\":\"{}\"}}]}}"
-        ),
-        json_escape(model),
-        json_escape(prompt)
-    );
+    let esc_model = json_escape(model);
+    let esc_prompt = json_escape(prompt);
+    const BODY_P1: &str = "{\"model\":\"";
+    const BODY_P2: &str = "\",\"max_tokens\":1024,\"tools\":[{\"name\":\"bash\",\"description\":\"run a shell command\",\"input_schema\":{\"type\":\"object\",\"properties\":{\"command\":{\"type\":\"string\"}},\"required\":[\"command\"]}}],\"messages\":[{\"role\":\"user\",\"content\":\"";
+    const BODY_P3: &str = "\"}]}";
+    let mut body = String::new();
+    body.push_str(BODY_P1);
+    body.push_str(esc_model.as_str());
+    body.push_str(BODY_P2);
+    body.push_str(esc_prompt.as_str());
+    body.push_str(BODY_P3);
     // The API key goes to curl via a config file on **stdin** (`-K -`), never argv,
     // so it does not leak to other local users through `ps`/`/proc`.
-    let header = curl_key_header(&key)?;
-    let mut child = std::process::Command::new("curl")
+    let header = curl_key_header(key.as_str())?;
+    let mut child = match std::process::Command::new("curl")
         .args([
             "-sS",
             "-m",
@@ -293,7 +381,7 @@ pub fn capture_live(prompt: &str, model: &str) -> Result<CogRecord, String> {
             "-H",
             "anthropic-version: 2023-06-01",
             "-d",
-            &body,
+            body.as_str(),
             "-K",
             "-",
         ])
@@ -301,22 +389,49 @@ pub fn capture_live(prompt: &str, model: &str) -> Result<CogRecord, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("curl: {e}"))?;
+    {
+        Ok(c) => c,
+        Err(e) => return Err(format!("curl: {e}")),
+    };
     {
         let stdin = child.stdin.as_mut().ok_or("curl: stdin unavailable")?;
-        stdin
-            .write_all(header.as_bytes())
-            .map_err(|e| format!("curl stdin: {e}"))?;
+        if let Err(e) = stdin.write_all(header.as_bytes()) {
+            return Err(format!("curl stdin: {e}"));
+        }
     }
     // `wait_with_output` closes stdin (curl sees EOF on its config) then collects output.
-    let out = child.wait_with_output().map_err(|e| format!("curl: {e}"))?;
+    let out = match child.wait_with_output() {
+        Ok(o) => o,
+        Err(e) => return Err(format!("curl: {e}")),
+    };
     if !out.status.success() {
-        return Err(format!(
-            "curl failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        ));
+        let stderr = utf8_lossy_clean(out.stderr.as_slice());
+        let mut msg = String::new();
+        msg.push_str("curl failed: ");
+        msg.push_str(stderr.as_str());
+        return Err(msg);
     }
-    parse_completion(&String::from_utf8_lossy(&out.stdout))
+    parse_completion(utf8_lossy_clean(out.stdout.as_slice()).as_str())
+}
+
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+mod live_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::live_bridge_advance_step;
+#[cfg(clean_islands)]
+pub use live_island::live_bridge_advance_step;
+
+contract_fn! {
+    /// Verified step-bounds predicate for a live-capture bridge session, linked via
+    /// `clean-kernel-defeq` to `live_bridge_step_in_bounds_isl`.
+    #[must_use]
+    pub const fn live_bridge_step_in_bounds(step: u64, total_steps: u64) -> bool
+    clauses [ensures result == (step <= total_steps)]
+    {
+        step <= total_steps
+    }
 }
 
 #[cfg(test)]

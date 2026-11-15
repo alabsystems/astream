@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: Apache-2.0
+# Copyright 2026 Andrew Yates
+#
+# THE RETENTION RULES OF THE BUS LOG aterm's node service hosts with the mesh on
+# (`bus.log`): aterm-link's `broker_rules::mesh_rules`, rule for rule and in its order, at
+# its own bounds. A rules file as `asb serve --retain-file` reads one (`parse_rules`,
+# astream-broker `retention.rs`); a subject is the first matching rule's. aterm's broker
+# job keeps `aterm-broker.retain`, beside this file: these are its rules with one more,
+# the alab fleet's mail, before its mail rule.
+#
+# astream's tests load this file wherever they run the mesh's rules (`aterm_retention`), at
+# byte bounds scaled down so a test's records reach them, and aterm-link holds it equal to
+# its `mesh_rules`, as it holds `aterm-broker.retain` equal to its `default_rules`: a change
+# on either side fails aterm's test until this file and aterm's pin of astream move
+# together.
+
+# The bulk stream: the one prefix rule, which holds the cut.
+prefix age=7d bytes=256MiB /f/*/pub/*/*/ev
+# Every presence row, node and session: its last value only.
+hold last /f/*/pub/*/*/presence
+# The alab fleet's mail lanes: held below the cut until both the inbox group of the node
+# its subject names (the mail push or the local bridge) and the person carry's group have
+# read it, for its age within its bytes. A lane retention has given up whole is forgotten:
+# it leaves `Last` and its producer's subject budget, so the carry, which opens a lane per
+# addressed session and kind, never runs out of lanes.
+hold read=/f/{2}/cur/{4}/node/inbox read=/f/alab/cur/n-carry/node/carry forget age=7d bytes=64MiB /f/alab/in/>
+# Every other fleet's mail lanes, where no carry reads: held until the inbox group of the
+# node its subject names reads it, for its age within its bytes.
+hold read=/f/{2}/cur/{4}/node/inbox age=7d bytes=64MiB /f/*/in/>
+# Every other subject.
+default age=7d bytes=32MiB

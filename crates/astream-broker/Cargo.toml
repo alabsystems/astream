@@ -1,6 +1,6 @@
 [package]
 name = "astream-broker"
-description = "astream servable broker: durable exactly-once pub/sub, Filter-routed subscribe, resume-from-offset (replay-subscription), durable consumer groups and atomic read-process-write, served over a Unix-domain socket, plaintext TCP, or (feature `aead`) an XChaCha20-Poly1305-sealed TCP transport; capability enforcement on attach behind feature `cap`. std-only concurrency (threads + Mutex/Condvar), zero third-party deps by default, forbid(unsafe)."
+description = "astream servable broker: durable exactly-once pub/sub, Filter-routed subscribe, resume-from-offset (replay-subscription), durable consumer groups and atomic read-process-write, served over a Unix-domain socket, plaintext TCP, or (feature `aead`) an XChaCha20-Poly1305-sealed TCP transport (ring's ChaCha20-Poly1305 under an in-crate HChaCha20 subkey); capability enforcement on attach behind feature `cap`. std-only concurrency (threads + Mutex/Condvar), zero third-party deps by default, forbid(unsafe)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,13 +11,19 @@ rust-version.workspace = true
 # Zero third-party dependencies — std only (threads, sync, UnixListener) plus the
 # in-tree wire vocabulary. The broker is a substrate crate, so forbid(unsafe).
 [features]
-# Off by default: enforce capabilities on the accept path. Pulls astream-cap
-# (and its vetted sha2), so the default broker stays zero-third-party.
+# Retention compiles in by default (REQUIREMENTS R4; aterm's ruling U23(a)): a broker
+# given no rules never compacts and behaves exactly as one built without it.
+default = ["retention"]
+# Off by default: enforce capabilities on the accept path. Pulls astream-cap and
+# its SHA-256, astream-digest -- both in-tree, so even a `cap` broker takes no
+# third-party crate.
 cap = ["dep:astream-cap"]
 # Off by default: an XChaCha20-Poly1305-sealed TCP transport (serve_tcp_sealed /
-# Client::connect_tcp_sealed). Pulls astream-aead (and its vetted cipher), so the
-# default broker stays zero-third-party.
-aead = ["dep:astream-aead"]
+# Client::connect_tcp_sealed). Pulls astream-aead and its cipher (ring's
+# ChaCha20-Poly1305; astream-aead derives the XChaCha20 subkey itself), so the default
+# broker stays zero-third-party. Names astream-aead's `stream` (SealedStream, the record
+# layer the wire speaks), which astream-aead compiles only when asked.
+aead = ["dep:astream-aead", "astream-aead/stream"]
 # Off by default: the Rung-7 forward-secret handshake (serve_tcp_handshake /
 # Client::connect_tcp_handshake) — ephemeral X25519 authenticated by the PSK.
 # Implies aead and enables astream-aead's handshake (pulls the vetted curve).
@@ -26,23 +32,52 @@ handshake = ["aead", "astream-aead/handshake"]
 # Client::connect_tcp_identity) — mutual signed-DH (SIGMA/Ed25519), no shared
 # secret. Implies handshake and enables astream-aead's identity (pulls Ed25519).
 identity = ["handshake", "astream-aead/identity"]
+# Off by default: accept relayed records (Broker::set_origin_keys, `origin`). A relayed
+# record's body is its origin's Ed25519 signature and the payload, checked before it is
+# appended, so a build without this refuses every relayed record. The Ed25519 is ring's, through
+# astream-aead, with no handshake or transport.
+relay = ["cap", "dep:astream-aead", "dep:astream-digest", "astream-aead/signature"]
 # Off by default: encrypt-at-rest for the durable log (Broker::open_encrypted /
-# BrokerLog::open_encrypted). Seals each record's payload on disk with the AEAD
-# (reuses astream-aead via `aead`); the default broker writes plaintext frames.
-at-rest = ["aead"]
+# BrokerLog::open_encrypted, and BrokerLog::seal_plaintext, the offline seal of a
+# plaintext log). Seals each record's payload and the .state/.held sidecars on disk
+# with astream-aead's seal/open. It pulls astream-aead ALONE, never the `aead`
+# feature nor astream-aead's `stream`: no sealed-transport code compiles under at-rest,
+# neither the broker's entry points (serve_tcp_sealed, connect_tcp_sealed, seal_tcp)
+# nor astream-aead's SealedStream and its hello handshake, so an embedder that keeps its
+# bus on one machine seals its log without the wire. The default broker writes plaintext
+# frames.
+at-rest = ["dep:astream-aead"]
 # Off by default: anti-rollback for the encrypted log (Broker::open_encrypted_verified).
 # Maintains an authenticated monotonic head watermark (a `<log>.hw` sidecar) so a
 # write-capable attacker cannot silently truncate/roll back the log. Implies at-rest.
 anti-rollback = ["at-rest"]
-# Off by default: retention (Broker::retain_before / BrokerLog::retain_before) —
-# compact the log by dropping records below a floor offset, keeping surviving
-# offsets absolute. std-only; works on plaintext and encrypted logs.
+# Off by default: serve and dial over a byte stream the embedder already authenticated
+# (Broker::serve_stream, FederationWire::Stream, `connect_stream`). Off, the serve path's
+# connection stays a closed set of concrete transports (`Conn`), which a verified lane can follow;
+# a stream link is a `dyn` callee it cannot. std-only.
+stream = []
+# ON by default (`default` above): retention — the caller's compactions
+# (Broker::retain_before / BrokerLog::retain_before, keeping surviving offsets absolute),
+# the writer's caps, and the retention rules (Broker::set_retention: the prefix rule's
+# cut, the held store `<log>.held`, the broker's retention tick). std-only; works on
+# plaintext and encrypted logs. `--no-default-features` builds the broker without it.
 retention = []
+
+[[test]]
+name = "tail_retention"
+# This process-wide CPU check exists only with retention. Keep its own harness,
+# but do not compile or launch an empty one in the no-default-features pass.
+required-features = ["retention"]
 
 [dependencies]
 astream-wire = { workspace = true }
-astream-cap = { path = "../astream-cap", version = "0.1.0", optional = true }
-astream-aead = { path = "../astream-aead", version = "0.1.0", optional = true }
+# The OS cordon: this boot's id (the unclean-open rule, logid.rs) and the ordering-only
+# flush. In-tree and zero-dependency, so the broker stays zero-third-party and keeps
+# forbid(unsafe): its FFI calls live in astream-sys's cordoned modules.
+astream-sys = { workspace = true }
+astream-cap = { workspace = true, optional = true }
+astream-aead = { workspace = true, optional = true }
+astream-digest = { workspace = true, optional = true }
 
 # Dev-only, and IN-TREE (not third-party): the cognition-routing test publishes a
 # REAL astream-agent CogRecord through the bus. astream-agent's own lib graph is
@@ -54,9 +89,13 @@ astream-wire = { workspace = true }
 # For the cap-enforcement test only (mints capabilities); the LIB graph stays
 # zero-third-party (astream-cap is an OPTIONAL runtime dep behind the `cap` feature).
 astream-cap = { path = "../astream-cap" }
+astream-digest = { workspace = true }
 
-# The durability bench carries the unit tests that pin its tier→label mapping (the
-# gated bench command runs only the relaxed tier), so it is built as a test target.
+# The durability bench's test target runs the unit tests of `examples/bench_tier`, the
+# module both broker_durability_bench and broker_pipeline_bench mount: its knob parsing,
+# tier labels, horizon refusal and full-flush and barrier counts. Gated claims read them
+# at every tier the benches run (the three Relaxed claims, the Strict pipeline-floor and
+# the four Ordered claims), so it is built as a test target.
 [[example]]
 name = "broker_durability_bench"
 path = "examples/broker_durability_bench.rs"
@@ -69,3 +108,17 @@ test = true
 [[bin]]
 name = "asb"
 path = "src/bin/asb.rs"
+
+# The guarded-handshake A/B (claim broker.attach-settled-bind) mints capabilities and
+# presents them, which only a `cap` build can do.
+[[example]]
+name = "broker_attach_bench"
+path = "examples/broker_attach_bench.rs"
+required-features = ["cap"]
+
+# The open of a large retained log, plaintext against sealed at rest (the measurement in
+# claim broker.guarded-at-rest): it seals its copy with BrokerLog::seal_plaintext.
+[[example]]
+name = "broker_open_bench"
+path = "examples/broker_open_bench.rs"
+required-features = ["at-rest"]

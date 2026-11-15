@@ -1,0 +1,14 @@
+[package]
+name = "astream-fabric"
+description = "An independent model of fabric replication, peer mesh routing, fan-out caching, cold-prefix RAM eviction, frame delta compression, and adaptive reconnect backoff over astream-broker; no astream runtime crate and no aterm code calls it. The shipped held store, federation and resident budget are `astream-broker`'s own: `held.rs`, `federation.rs` and `store.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-sys = { workspace = true }
+astream-broker = { workspace = true }

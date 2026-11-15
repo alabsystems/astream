@@ -1,0 +1,11 @@
+[package]
+name = "astream-grapheme-layout"
+description = "An independent model of a Unicode UAX #29 ZWJ grapheme cluster byte budget, VS15/VS16 emoji width resolver, East Asian Ambiguous width toggle, Trojan-Source bidirectional control sanitizer, VT `HTS`/`TBC` tabstop bitmap, and Metal glyph-atlas LRU; no astream runtime crate and no aterm code calls it. astream's shipped cell width is `astream-term`'s `char_display_width`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

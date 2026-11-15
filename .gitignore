@@ -8,3 +8,6 @@
 
 # pub stage's work directory (publication engine); never source.
 /publish/.out/
+# The verified lane (`targo trust check`) writes a per-crate verification cache under
+# crates/<crate>/target/trust-cache even when CARGO_TARGET_DIR points elsewhere.
+/crates/*/target/

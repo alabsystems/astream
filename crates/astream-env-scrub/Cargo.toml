@@ -1,0 +1,11 @@
+[package]
+name = "astream-env-scrub"
+description = "An independent model of the `aterm` child-shell AI environment variable stripper (`CLAUDE*`..`_DEVTOOL_*`), `${VAR:?}` fail-safe `rm` operand guard, inline secret argv refusal, session-env detection, `restart pid=` validation, and `NEEDS YOU:` banner multiplexing; no astream runtime crate and no aterm code calls it. aterm's env strip, `restart` verb and banners are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

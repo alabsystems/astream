@@ -1,6 +1,6 @@
 [package]
 name = "astream-cap"
-description = "astream capability mint: an unforgeable, HMAC-SHA256-signed capability over the astream_wire Filter grammar. A capability IS a signed Filter (a subject subtree the bearer may attach/observe/drive); the broker mints and verifies it. Uses the workspace-vetted sha2 (RFC-2104 HMAC over SHA-256) — a standard construction over a vetted primitive, never a hand-rolled cipher/MAC. The other half of 'SSH' (an AEAD wire) is a separate, deliberate crypto-dependency decision."
+description = "astream capability mint: an unforgeable, HMAC-SHA256-signed capability over the astream_wire Filter grammar. A capability IS a signed Filter (a subject subtree the bearer may attach/observe/drive); the broker mints and verifies it. HMAC is RFC 2104 over SHA-256 — a standard construction, never an invented MAC — and both are the workspace's own astream-digest (FIPS 180-4 and RFC 2104, pinned to their vectors and to the sha2 crate the hash replaced), so this crate takes no third-party dependency. The other half of 'SSH' (an AEAD wire) is a separate, deliberate crypto-dependency decision."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -8,10 +8,17 @@ repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
 
-# sha2 is the ONE crypto-grade primitive — already a vetted workspace dependency
-# (astream-evidence hashes with it). HMAC is built on it per RFC 2104; no primitive
-# is hand-rolled. astream-wire provides the Filter/Subject grammar the capability
-# authorizes over. forbid(unsafe).
+# astream-digest is the ONE crypto-grade primitive: the workspace's SHA-256 (it
+# replaced the sha2 crate and its six-package chain, held to it byte for byte) and
+# the one HMAC-SHA256 over it (RFC 2104; this crate's const core moved there, and
+# the RFC 4231 vectors with it). The recorded tags, attach proofs and producer ids
+# that are this crate's wire contract stay pinned in src/lib.rs. astream-wire
+# provides the Filter/Subject grammar the capability authorizes over.
+# forbid(unsafe).
 [dependencies]
 astream-wire = { workspace = true }
-sha2 = { workspace = true }
+astream-digest = { workspace = true }
+# The owner-only secret-file rule (capfile) opens and judges a secret through
+# astream-sys: a non-blocking open, the owner uid, and macOS's access list.
+# Zero-dependency itself, so this crate still takes no third-party code.
+astream-sys = { workspace = true }

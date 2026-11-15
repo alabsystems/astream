@@ -1,0 +1,11 @@
+[package]
+name = "astream-coalesce-4"
+description = "An independent model of Macaroon discharge, Last radix cursors, SIGMA identity binding, damage coalescing, and restart fences (shard 4 of 6, batches 55..56); no astream runtime crate and no aterm code calls it. `aterm harness agy` is `aterm-agent`'s `harness::agy_quota`, and aterm's banners are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

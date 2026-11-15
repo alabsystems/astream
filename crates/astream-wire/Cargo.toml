@@ -1,6 +1,6 @@
 [package]
 name = "astream-wire"
-description = "astream pure vocabulary: frame codec, Subject/Filter, partitioning, offsets. Zero I/O, zero deps."
+description = "astream pure vocabulary: frame codec, step records, Subject/Filter, partitioning, offsets. Zero I/O, zero deps."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

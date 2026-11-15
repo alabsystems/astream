@@ -1,0 +1,11 @@
+[package]
+name = "astream-protocol-6"
+description = "An independent model of cap revocation, key rotation, HKDF schedules, VT survey/injectivity, and outbox/inbox protocols (shard 6 of 6, batches 35..36); no astream runtime crate and no aterm code calls it. aterm's `restart` verb is aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

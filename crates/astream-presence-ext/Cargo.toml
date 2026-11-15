@@ -1,0 +1,13 @@
+[package]
+name = "astream-presence-ext"
+description = "An independent model of extended DESIGN-aterm-fabric §4.2 presence fields (driving, watchers, parent, autopilot), §5.4 busy/absent barrier auto-responder, EVENT turn by= driver provenance, watcher lag shedding, parent trees, and autopilot cadence gates; no astream runtime crate and no aterm code calls it. No aterm bridge writes `driving`, `watchers` or `parent`, which DESIGN-aterm-fabric §7 lists as DESIGNED, and the lease-driven `driving=` went with aterm's drive face (`678ad583d`). `autopilot` is no §4.2 field: aterm's Autopilot is `aterm-agent`'s harness. aterm's presence rows are `aterm-link`'s `presence.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-digest = { workspace = true }

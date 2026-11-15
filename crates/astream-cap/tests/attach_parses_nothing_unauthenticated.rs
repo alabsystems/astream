@@ -1,3 +1,5 @@
+//! Evidence for `cap.attach-proof-before-parse`.
+//!
 //! `verify_attach` runs on the grant string of an `Attach` frame, before the
 //! peer has proved anything. Parsing that string builds a `Filter`, which costs
 //! tens of bytes per `/x` segment, so a grant of 8M one-byte segments (16 MiB,

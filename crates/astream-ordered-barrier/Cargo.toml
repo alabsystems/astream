@@ -1,0 +1,12 @@
+[package]
+name = "astream-ordered-barrier"
+description = "An independent model of the Apple `F_BARRIERFSYNC` `Durability::Ordered` boot-volume `fstat` resolver, Darwin refusal `Strict` fallback latch, escalated `visible_head` hold, failed-flush `Lossy` poison, `100ms` horizon coalescer, and same-batch `/a/bind` matcher; no astream runtime crate and no aterm code calls it. The shipped Ordered tier is `astream-broker`'s `store.rs` and `escalation.rs` over `astream-sys`'s `barrier_sync`, proved by `broker.ordered-tier`, and aterm's 100 ms horizon is `aterm-link`'s `durability`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

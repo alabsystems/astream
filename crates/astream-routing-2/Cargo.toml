@@ -1,0 +1,11 @@
+[package]
+name = "astream-routing-2"
+description = "An independent model of subject trie routing, federation split-horizon, and causal watermark scheduling (shard 2 of 6, batches 87..88); no astream runtime crate and no aterm code calls it. `aterm harness agy` is `aterm-agent`'s `harness::agy_quota`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]

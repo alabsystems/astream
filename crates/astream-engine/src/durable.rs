@@ -7,8 +7,14 @@
 //! so a process that dies and restarts resumes from the last committed step,
 //! re-running none of them. This is the durable-execution capability ("a workflow
 //! survives a crash and resumes exactly") built on the same `astream_wire::Frame`
-//! codec and Strict durability as the log; the step record format is its own
-//! `STEP_VERSION`, disjoint from the VT `ENV_VERSION` and the cognition `COG_VERSION`.
+//! codec and Strict durability as the log. The step record itself is astream's
+//! generic opaque record, [`astream_wire::steps`]: its own [`STEP_VERSION`]
+//! (which versions the layout and is no stream-kind tag: the cognition
+//! `COG_VERSION` is 1 too), with the torn-tail-or-fault classifier this journal
+//! recovers by. It lives in the
+//! zero-dependency wire crate so an embedder that keeps step records somewhere
+//! other than a file (a shared-memory region bounded by a commit word) reads
+//! them with the same scanner, without linking this engine and its VT fold.
 //!
 //! ## Exactly-once boundary (honest)
 //!
@@ -30,42 +36,76 @@
 //! truncating there would discard fsync'd commits and make `run` re-execute
 //! their side effects; [`open_truncating`](WorkflowJournal::open_truncating) is
 //! the explicit operator repair.
+//!
+//! One crash reads as a fault rather than a torn tail: a step whose output
+//! itself holds an encoded astream frame (a record of this or any astream
+//! stream), cut by the crash after that nested frame's last byte. The classifier
+//! cannot tell a frame nested in the partial record from one that follows a
+//! rotted length ([`astream_wire::steps`] says why), so `open` refuses that
+//! journal although nothing past its committed prefix was ever acknowledged, and
+//! the workflow does not resume until an operator runs `open_truncating`. The
+//! error is only ever this strict one: a nested frame never makes `open` drop a
+//! committed step.
 
-use crate::store::{self, FaultKind, RecoverReport, Tail};
-use astream_wire::{Frame, FrameError};
+use crate::store::{self, RecoverReport, Tail};
+use astream_wire::steps;
 use std::fs::File;
 use std::io::{self, Read};
 use std::path::Path;
 
-/// Step-record format version (disjoint from the VT `ENV_VERSION` and `COG_VERSION`).
-pub const STEP_VERSION: u8 = 1;
+// The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
+// `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
+#[cfg(clean_islands)]
+#[path = "durable_island.rs"]
+mod durable_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::{journal_committed_monotone, journal_step_match_or_keep};
+#[cfg(clean_islands)]
+pub use durable_island::{journal_committed_monotone, journal_step_match_or_keep};
 
-/// Fixed step-record header: version(1) + step(8) + len(4).
-const STEP_HEADER: usize = 13;
-
-/// Encode one committed step: payload = version | step:u64 LE | len:u32 LE | output,
-/// wrapped in a CRC [`Frame`]. A body larger than `u32` is [`FrameError::TooLarge`].
-fn encode_step(step: u64, output: &[u8]) -> Result<Vec<u8>, FrameError> {
-    let mut p = Vec::with_capacity(STEP_HEADER + output.len());
-    p.push(STEP_VERSION);
-    p.extend_from_slice(&step.to_le_bytes());
-    let len = u32::try_from(output.len()).map_err(|_| FrameError::TooLarge)?;
-    p.extend_from_slice(&len.to_le_bytes());
-    p.extend_from_slice(output);
-    Frame::new(p).encode()
-}
-
-/// Decode one step payload (bounds-checked, panic-free). Returns `(step, output)`.
-fn decode_step(payload: &[u8]) -> Option<(u64, Vec<u8>)> {
-    if payload.len() < STEP_HEADER || payload[0] != STEP_VERSION {
-        return None;
+contract_fn! {
+    /// Kernel-certified check that a decoded journal record's step index `found_step`
+    /// equals the next expected dense step index `expected_step`.
+    ///
+    /// Discharged in the Clean CIC kernel by definitional equality against
+    /// `step_matches_next_isl` (`clean-kernel-defeq`).
+    #[must_use]
+    pub const fn step_matches_next(expected_step: u64, found_step: u64) -> bool
+    clauses [ensures result == (expected_step == found_step)]
+    {
+        expected_step == found_step
     }
-    let step = u64::from_le_bytes(payload[1..9].try_into().ok()?);
-    let len = u32::from_le_bytes(payload[9..13].try_into().ok()?) as usize;
-    let end = STEP_HEADER.checked_add(len)?;
-    let out = payload.get(STEP_HEADER..end)?.to_vec();
-    Some((step, out))
 }
+
+/// Multi-condition durable workflow step-commit protocol kernel:
+/// admits advancing `cur_steps` to `next_steps` only when `poisoned == 0`,
+/// `step_index == cur_steps`, and `cur_steps < next_steps`.
+///
+/// Hand-written plain Rust, not compiled from Clean: it restates
+/// `Astream.Engine.TlaDurableJournal.journal_admit_step_commit_isl`, the island's
+/// composition of the Clean-Origin (`I5`) transition functions
+/// [`journal_step_match_or_keep`] and [`journal_committed_monotone`], and the `durable`
+/// suite holds it to that composition over a grid of boundary operands.
+#[must_use]
+pub const fn journal_admit_step_commit(
+    poisoned: u64,
+    cur_steps: u64,
+    step_index: u64,
+    next_steps: u64,
+) -> u64 {
+    if poisoned == 0 && step_index == cur_steps && cur_steps < next_steps {
+        next_steps
+    } else {
+        cur_steps
+    }
+}
+
+/// Step-record format version. The record is defined in [`astream_wire::steps`],
+/// whose doc of this constant says what it does and does not tell a reader (it
+/// versions the layout; it equals the cognition `COG_VERSION`, so it names no
+/// kind of stream); it is re-exported here, where the journal's users have
+/// always found it.
+pub use astream_wire::steps::STEP_VERSION;
 
 /// The outcome of scanning a journal's bytes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,40 +123,23 @@ pub struct StepScan {
 /// torn tail or a fault, classified exactly like [`crate::recover`]. A step is
 /// accepted only if its index is exactly the next expected one (a gap-free,
 /// in-order spine, like the log's offset spine). Pure and panic-free.
+///
+/// The scan is [`astream_wire::steps::scan_steps_from`] from step 0; this maps
+/// its body ranges to owned outputs and its end onto the log's [`Tail`].
 pub fn scan_steps(bytes: &[u8]) -> StepScan {
-    let mut committed: Vec<Vec<u8>> = Vec::new();
-    let mut pos = 0usize;
-    let tail = loop {
-        match Frame::decode(&bytes[pos..]) {
-            Ok(None) => break store::end_tail(bytes, pos),
-            Err(e) => break store::corrupt_frame_tail(bytes, pos, e),
-            Ok(Some(d)) => match decode_step(&d.frame.payload) {
-                None => {
-                    break Tail::Fault {
-                        at: pos,
-                        kind: FaultKind::BadStep,
-                    }
-                }
-                Some((step, _)) if step != committed.len() as u64 => {
-                    break Tail::Fault {
-                        at: pos,
-                        kind: FaultKind::OutOfOrder {
-                            expected: committed.len() as u64,
-                            found: step,
-                        },
-                    }
-                }
-                Some((_, output)) => {
-                    committed.push(output);
-                    pos += d.consumed;
-                }
-            },
-        }
-    };
+    let scan = steps::scan_steps_from(bytes, 0);
+    // Every range is a body the scan found inside these same bytes, so the
+    // slice is in bounds.
+    let step_len = scan.steps.len();
+    let cap = if step_len < 4096 { step_len } else { 4096 };
+    let mut committed = Vec::with_capacity(cap);
+    for (_, body) in scan.steps {
+        committed.push(bytes.get(body).unwrap_or(&[]).to_vec());
+    }
     StepScan {
         committed,
-        valid_len: pos,
-        tail,
+        valid_len: scan.valid_len,
+        tail: store::tail_of(scan.end),
     }
 }
 
@@ -148,7 +171,7 @@ impl WorkflowJournal {
     }
 
     fn open_with(path: &Path, truncate_faults: bool) -> io::Result<WorkflowJournal> {
-        let mut file = store::open_segment(path)?;
+        let mut file = store::open_log_file(path)?;
         let mut existing = Vec::new();
         file.read_to_end(&mut existing)?;
         let scan = scan_steps(&existing);
@@ -194,7 +217,7 @@ impl WorkflowJournal {
         &self.committed
     }
 
-    /// Whether a failed rollback has poisoned this handle (see
+    /// Whether a write or fsync error has poisoned this handle (see
     /// [`crate::FileLog::is_poisoned`]); appends are refused until reopened.
     pub fn is_poisoned(&self) -> bool {
         self.poisoned
@@ -208,25 +231,34 @@ impl WorkflowJournal {
         F: FnMut(u64) -> Vec<u8>,
     {
         let start = self.committed.len() as u64;
-        for i in start..total {
+        let target = journal_committed_monotone(start, total);
+        let mut committed_steps = start;
+        for i in start..target {
             let output = step(i);
-            let frame = encode_step(i, &output)
+            let frame = steps::encode_step(i, &output)
                 .map_err(|_| io::Error::new(io::ErrorKind::InvalidData, "step output too large"))?;
             self.append(&frame)?;
             self.committed.push(output);
+            committed_steps = journal_admit_step_commit(
+                u64::from(self.poisoned),
+                committed_steps,
+                i,
+                i.saturating_add(1),
+            );
         }
+        let _ = committed_steps;
         let take = usize::try_from(total)
             .unwrap_or(usize::MAX)
             .min(self.committed.len());
-        Ok(self.committed[..take].to_vec())
+        Ok(self.committed.iter().take(take).cloned().collect())
     }
 
-    /// Atomic durable append: rolls back a partial frame on a write/fsync error so
-    /// the on-disk journal stays a clean prefix of committed steps, and poisons
-    /// the journal if the rollback fails (the log store's discipline, shared).
+    /// Durable append under the log store's discipline, shared: a write or fsync
+    /// error poisons the journal (every later append is refused until a reopen
+    /// recovers it) after truncating the failed frame's bytes away, best effort.
     fn append(&mut self, frame_bytes: &[u8]) -> io::Result<()> {
         store::append_frame(&mut self.file, self.len, &mut self.poisoned, frame_bytes)?;
-        self.len += frame_bytes.len() as u64;
+        self.len = self.len.saturating_add(frame_bytes.len() as u64);
         Ok(())
     }
 }
@@ -234,6 +266,9 @@ impl WorkflowJournal {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::store::FaultKind;
+    use astream_wire::steps::{decode_step, encode_step};
+    use astream_wire::Frame;
 
     #[test]
     fn step_record_round_trips() {
@@ -241,7 +276,7 @@ mod tests {
         let decoded = Frame::decode(&bytes).unwrap().unwrap();
         assert_eq!(
             decode_step(&decoded.frame.payload),
-            Some((3, b"hello".to_vec()))
+            Some((3, &b"hello"[..]))
         );
     }
 

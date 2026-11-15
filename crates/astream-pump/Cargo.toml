@@ -12,14 +12,25 @@ rust-version.workspace = true
 # third-party dependency, and the default pump stays zero-third-party.
 [features]
 aead = ["astream-broker/aead"]
+handshake = ["aead", "astream-broker/handshake"]
+identity = ["handshake", "astream-broker/identity"]
+cap = ["astream-broker/cap"]
 
 # The pump wires the transport (astream-broker) to perception (astream-term).
 # forbid(unsafe); its dependencies are only in-repo substrate crates.
 [dependencies]
 astream-broker = { path = "../astream-broker" }
 astream-term = { path = "../astream-term" }
+# `aspump` compiles astream-cap's capfile.rs in by path (its --cap-file reader), and
+# that file's secret-file rule opens and judges through astream-sys (zero-dependency).
+astream-sys = { path = "../astream-sys" }
 
 # `aspump` — the shell face: tail a session's /out and print semantic wake lines.
 [[bin]]
 name = "aspump"
 path = "src/bin/aspump.rs"
+
+[target.'cfg(unix)'.dev-dependencies]
+astream-engine = { path = "../astream-engine" }
+astream-host = { path = "../astream-host" }
+astream-wire = { path = "../astream-wire" }

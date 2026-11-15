@@ -1,0 +1,12 @@
+[package]
+name = "astream-atpkg-toolchain"
+description = "An independent model of the `targo` explicit verification-lane enforcer (`--unverified` vs `trust`), stale `trust` toolchain symlink detector (`aterm pkg repair`), per-target availability router, `rustup` PATH pin verifier, disk cache reclaimer, and index pin monotonicity; no astream runtime crate and no aterm code calls it. atpkg's `targo` shim and `aterm pkg repair` are aterm's own code, its `atpkg` crate. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

@@ -1,0 +1,12 @@
+[package]
+name = "astream-agy-quota"
+description = "An independent model of `aterm harness agy` multi-pool (`Gemini`/`Claude`/`Gpt`) 5-hour & weekly quota ledgers, `pick` pool rotator, pre-fanout worker admission gate, window reset clock, capability-tier floor, and burn-rate forecast; no astream runtime crate and no aterm code calls it. `aterm harness agy` is aterm's own code, `aterm-agent`'s `harness::agy_quota`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-digest = { workspace = true }

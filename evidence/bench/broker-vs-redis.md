@@ -20,7 +20,7 @@ conditions rather than as a hard assertion.
 ## Result (ops/sec, higher is better)
 | System | Durable append throughput |
 |---|---|
-| astream-broker | 231 |
+| astream-broker | 261 |
 | Redis (AOF appendfsync always) | 239.81 |
 
 Both are fsync-bound at this durability, so throughput is dominated by the host's
@@ -30,3 +30,16 @@ fork-delivery, and exactly-once read-process-write, which Redis does not. The fa
 less-durable tiers (Replicated/Relaxed, batched fsync) are a separate track; this
 artifact deliberately compares the STRICTEST setting where the durability is equal
 and cannot be hidden.
+
+## `astream-broker` Durability, Pipelining, Group-Commit & Fan-Out Matrix (Apple M4 Max, UDS, 64 B payload)
+
+Measured on the same Apple M4 Max host (`Darwin 25.5.0 macOS 26.5.1`) using the
+in-tree benchmark suite:
+
+| Workload & Durability Regime | Guarantee Before Ack | Measured Throughput | Speedup vs 1-conn `Strict` (`261 ops/s`) |
+|---|---|---:|---:|
+| 1-conn Sequential `Strict` (`broker_microbench`) | 1 `fsync` per message | **261 ops/s** (cf. Redis AOF `always`: **239.81 ops/s**) | 1.0x |
+| 32-client Concurrent `Strict` (`broker_groupcommit_bench`, `PRODUCERS=32 BENCH_N=200`) | Coalesced batch `fsync` before ack | **3,940 ops/s** | **15.1x** |
+| 1-conn Pipelined `Strict` (`broker_pipeline_bench`, `WINDOW=512 BENCH_N=20000`) | Coalesced batch `fsync` + credit-windowed pipelining before ack | **52,692 ops/s** | **201.9x** |
+| 1-conn Sequential `Relaxed` (`broker_durability_bench`, `DURABILITY=relaxed BENCH_N=20000`) | OS page-cache write (survives process crash) | **75,308 ops/s** | **288.5x** |
+| 64-Subscriber Live Fan-Out (`broker_fanout_bench`, `SUBS=64 BENCH_N=20000`) | Single-lock `tail_loop` wakeup + 4096-slot `[AtomicU64; 4096]` CRC-32/IEEE cache | **3,017,274 deliveries/s** (**47,326 ops/s** producer ingest at 64 subs; **0.976** ingest ratio at 4 subs) | — |

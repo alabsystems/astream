@@ -11,8 +11,9 @@
 //!
 //! # Construction (the NNpsk pattern) — WE own it
 //! We own the whole protocol: the message framing, the transcript binding, and
-//! HMAC-SHA256 / HKDF-SHA256, composed here over the workspace `sha2` exactly as
-//! `astream-cap` owns its HMAC. The ONE primitive we delegate is the raw X25519
+//! the key schedule. HMAC-SHA256 / HKDF-SHA256 are the workspace's own, in
+//! `astream-digest` (the one HMAC astream-cap tags with too; this crate's copy
+//! moved there, its zeroization with it). The ONE primitive we delegate is the raw X25519
 //! scalar multiplication — hand-rolling constant-time curve25519 field arithmetic
 //! is where DIY crypto breaks — to the vetted `x25519-dalek`.
 //!
@@ -34,53 +35,41 @@
 //! PSK — no explicit confirmation message needed.
 
 use crate::{SealedStream, KEY_LEN};
-use sha2::{Digest, Sha256};
+use astream_digest::{hkdf_expand_32, hkdf_extract};
 use std::io::{self, Read, Write};
 use x25519_dalek::{PublicKey, SharedSecret, StaticSecret};
 
-const SHA256_BLOCK: usize = 64;
-const SHA256_OUT: usize = 32;
+#[cfg(clean_islands)]
+#[path = "handshake_island.rs"]
+mod handshake_island;
+#[cfg(not(clean_islands))]
+pub use crate::twins::handshake_clamp_info_len;
+#[cfg(clean_islands)]
+pub use handshake_island::handshake_clamp_info_len;
 
-/// HMAC-SHA256 (RFC 2104), composed over the workspace `sha2`. Ours, not a
-/// dependency — the same stance `astream-cap` takes.
-fn hmac_sha256(key: &[u8], msg: &[u8]) -> [u8; SHA256_OUT] {
-    // Derive the block-sized key K0: hash an over-long key, else right-zero-pad.
-    let mut k0 = [0u8; SHA256_BLOCK];
-    if key.len() > SHA256_BLOCK {
-        k0[..SHA256_OUT].copy_from_slice(&Sha256::digest(key));
-    } else {
-        k0[..key.len()].copy_from_slice(key);
+contract_fn! {
+    /// Verified check that a handshake message carries version 1 (`ver == 1`),
+    /// linked via `clean-kernel-defeq` to `handshake_version_valid_isl`.
+    #[must_use]
+    pub const fn handshake_version_valid(ver: u8) -> bool
+    clauses [ensures result == (ver == 1)]
+    {
+        ver == 1
     }
-    let mut ipad = [0x36u8; SHA256_BLOCK];
-    let mut opad = [0x5cu8; SHA256_BLOCK];
-    for i in 0..SHA256_BLOCK {
-        ipad[i] ^= k0[i];
-        opad[i] ^= k0[i];
-    }
-    let inner = {
-        let mut h = Sha256::new();
-        h.update(ipad);
-        h.update(msg);
-        h.finalize()
-    };
-    let mut h = Sha256::new();
-    h.update(opad);
-    h.update(inner);
-    let mut out = [0u8; SHA256_OUT];
-    out.copy_from_slice(&h.finalize());
-    out
 }
 
 /// HKDF-SHA256 (RFC 5869) producing exactly 32 bytes (a single expand block,
-/// L = 32 ≤ 255·32). Extract then Expand, ours over `hmac_sha256`.
+/// L = 32 ≤ 255·32): `astream-digest`'s Extract then Expand.
+///
+/// Both run through astream-digest's wiping HMAC, which zeroes the key block and
+/// pads it derives from the salt (the PSK, in the NNpsk handshake) and from the
+/// PRK before it returns: the zeroization this crate's own HMAC copy did, until
+/// that copy was replaced by astream-digest's one HMAC (astream-cap's core moved
+/// there too, and aterm's copy has gone the same way). The PRK
+/// itself is this function's to wipe, and it does.
 pub(crate) fn hkdf_sha256_32(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; 32] {
-    // Extract.
-    let mut prk = hmac_sha256(salt, ikm);
-    // Expand, N = 1: T(1) = HMAC(PRK, T(0)=<empty> ‖ info ‖ 0x01).
-    let mut t1_input = Vec::with_capacity(info.len() + 1);
-    t1_input.extend_from_slice(info);
-    t1_input.push(0x01);
-    let okm = hmac_sha256(&prk, &t1_input);
+    let mut prk = hkdf_extract(salt, ikm);
+    let okm = hkdf_expand_32(&prk, info);
     prk.fill(0); // wipe the intermediate pseudo-random key
     core::hint::black_box(&mut prk);
     okm
@@ -89,43 +78,235 @@ pub(crate) fn hkdf_sha256_32(salt: &[u8], ikm: &[u8], info: &[u8]) -> [u8; 32] {
 const HS_MAGIC: [u8; 4] = *b"aSH1";
 const HS_VERSION: u8 = 1;
 const HS_MSG_LEN: usize = 4 + 1 + 32; // magic ‖ version ‖ ephemeral pubkey
-const HS_LABEL: &[u8] = b"astream-handshake-v1";
+const HS_LABEL: &[u8; 20] = b"astream-handshake-v1";
+
+const fn build_hs_msg(pubkey: &[u8; 32]) -> [u8; HS_MSG_LEN] {
+    [
+        HS_MAGIC[0],
+        HS_MAGIC[1],
+        HS_MAGIC[2],
+        HS_MAGIC[3],
+        HS_VERSION,
+        pubkey[0],
+        pubkey[1],
+        pubkey[2],
+        pubkey[3],
+        pubkey[4],
+        pubkey[5],
+        pubkey[6],
+        pubkey[7],
+        pubkey[8],
+        pubkey[9],
+        pubkey[10],
+        pubkey[11],
+        pubkey[12],
+        pubkey[13],
+        pubkey[14],
+        pubkey[15],
+        pubkey[16],
+        pubkey[17],
+        pubkey[18],
+        pubkey[19],
+        pubkey[20],
+        pubkey[21],
+        pubkey[22],
+        pubkey[23],
+        pubkey[24],
+        pubkey[25],
+        pubkey[26],
+        pubkey[27],
+        pubkey[28],
+        pubkey[29],
+        pubkey[30],
+        pubkey[31],
+    ]
+}
+
+const fn has_hs_magic(msg: &[u8; HS_MSG_LEN]) -> bool {
+    msg[0] == HS_MAGIC[0] && msg[1] == HS_MAGIC[1] && msg[2] == HS_MAGIC[2] && msg[3] == HS_MAGIC[3]
+}
+
+const fn hs_msg_version(msg: &[u8; HS_MSG_LEN]) -> u8 {
+    msg[4]
+}
+
+const fn extract_hs_pubkey(msg: &[u8; HS_MSG_LEN]) -> [u8; 32] {
+    [
+        msg[5], msg[6], msg[7], msg[8], msg[9], msg[10], msg[11], msg[12], msg[13], msg[14],
+        msg[15], msg[16], msg[17], msg[18], msg[19], msg[20], msg[21], msg[22], msg[23], msg[24],
+        msg[25], msg[26], msg[27], msg[28], msg[29], msg[30], msg[31], msg[32], msg[33], msg[34],
+        msg[35], msg[36],
+    ]
+}
 
 pub(crate) fn write_hs_msg<W: Write>(w: &mut W, pubkey: &[u8; 32]) -> io::Result<()> {
-    let mut msg = [0u8; HS_MSG_LEN];
-    msg[..4].copy_from_slice(&HS_MAGIC);
-    msg[4] = HS_VERSION;
-    msg[5..].copy_from_slice(pubkey);
+    let msg = build_hs_msg(pubkey);
     w.write_all(&msg)?;
     w.flush()
 }
 
 pub(crate) fn read_hs_msg<R: Read>(r: &mut R) -> io::Result<[u8; 32]> {
     let mut msg = [0u8; HS_MSG_LEN];
-    r.read_exact(&mut msg)?;
-    if msg[..4] != HS_MAGIC || msg[4] != HS_VERSION {
+    let read_exact_op: fn(&mut R, &mut [u8]) -> io::Result<()> = Read::read_exact;
+    read_exact_op(r, &mut msg)?;
+    if !has_hs_magic(&msg) || !handshake_version_valid(hs_msg_version(&msg)) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "astream handshake: bad magic/version (peer not speaking the sealed handshake)",
         ));
     }
-    let mut pk = [0u8; 32];
-    pk.copy_from_slice(&msg[5..]);
-    Ok(pk)
+    Ok(extract_hs_pubkey(&msg))
 }
 
 /// A fresh ephemeral X25519 keypair, seeded from the OS CSPRNG (`getrandom`, which
 /// we already depend on). We use `StaticSecret` (byte-seedable) as a one-shot
 /// ephemeral and drop it after the single DH — `x25519-dalek`'s `zeroize` wipes it
 /// on drop, and we wipe our transient seed too.
-pub(crate) fn ephemeral() -> (StaticSecret, [u8; 32]) {
+pub(crate) fn ephemeral() -> io::Result<(StaticSecret, [u8; 32])> {
     let mut seed = [0u8; 32];
-    getrandom::getrandom(&mut seed).expect("OS CSPRNG unavailable");
+    if getrandom::getrandom(&mut seed).is_err() {
+        return Err(io::Error::other("OS CSPRNG unavailable"));
+    }
     let secret = StaticSecret::from(seed);
     seed.fill(0);
     core::hint::black_box(&mut seed);
     let public = *PublicKey::from(&secret).as_bytes();
-    (secret, public)
+    Ok((secret, public))
+}
+
+#[inline(always)]
+const fn hs_info_label_lo() -> [u8; 16] {
+    [
+        HS_LABEL[0],
+        HS_LABEL[1],
+        HS_LABEL[2],
+        HS_LABEL[3],
+        HS_LABEL[4],
+        HS_LABEL[5],
+        HS_LABEL[6],
+        HS_LABEL[7],
+        HS_LABEL[8],
+        HS_LABEL[9],
+        HS_LABEL[10],
+        HS_LABEL[11],
+        HS_LABEL[12],
+        HS_LABEL[13],
+        HS_LABEL[14],
+        HS_LABEL[15],
+    ]
+}
+
+#[inline(always)]
+const fn hs_info_label_hi() -> [u8; 4] {
+    [HS_LABEL[16], HS_LABEL[17], HS_LABEL[18], HS_LABEL[19]]
+}
+
+#[inline(always)]
+const fn hs_info_client_lo(client_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        client_pub[0],
+        client_pub[1],
+        client_pub[2],
+        client_pub[3],
+        client_pub[4],
+        client_pub[5],
+        client_pub[6],
+        client_pub[7],
+        client_pub[8],
+        client_pub[9],
+        client_pub[10],
+        client_pub[11],
+        client_pub[12],
+        client_pub[13],
+        client_pub[14],
+        client_pub[15],
+    ]
+}
+
+#[inline(always)]
+const fn hs_info_client_hi(client_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        client_pub[16],
+        client_pub[17],
+        client_pub[18],
+        client_pub[19],
+        client_pub[20],
+        client_pub[21],
+        client_pub[22],
+        client_pub[23],
+        client_pub[24],
+        client_pub[25],
+        client_pub[26],
+        client_pub[27],
+        client_pub[28],
+        client_pub[29],
+        client_pub[30],
+        client_pub[31],
+    ]
+}
+
+#[inline(always)]
+const fn hs_info_server_lo(server_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        server_pub[0],
+        server_pub[1],
+        server_pub[2],
+        server_pub[3],
+        server_pub[4],
+        server_pub[5],
+        server_pub[6],
+        server_pub[7],
+        server_pub[8],
+        server_pub[9],
+        server_pub[10],
+        server_pub[11],
+        server_pub[12],
+        server_pub[13],
+        server_pub[14],
+        server_pub[15],
+    ]
+}
+
+#[inline(always)]
+const fn hs_info_server_hi(server_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        server_pub[16],
+        server_pub[17],
+        server_pub[18],
+        server_pub[19],
+        server_pub[20],
+        server_pub[21],
+        server_pub[22],
+        server_pub[23],
+        server_pub[24],
+        server_pub[25],
+        server_pub[26],
+        server_pub[27],
+        server_pub[28],
+        server_pub[29],
+        server_pub[30],
+        server_pub[31],
+    ]
+}
+
+const fn build_hs_info(client_pub: &[u8; 32], server_pub: &[u8; 32]) -> [u8; 84] {
+    let [l0, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15] = hs_info_label_lo();
+    let [l16, l17, l18, l19] = hs_info_label_hi();
+    let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15] =
+        hs_info_client_lo(client_pub);
+    let [c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31] =
+        hs_info_client_hi(client_pub);
+    let [s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15] =
+        hs_info_server_lo(server_pub);
+    let [s16, s17, s18, s19, s20, s21, s22, s23, s24, s25, s26, s27, s28, s29, s30, s31] =
+        hs_info_server_hi(server_pub);
+    [
+        l0, l1, l2, l3, l4, l5, l6, l7, l8, l9, l10, l11, l12, l13, l14, l15, l16, l17, l18, l19,
+        c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19,
+        c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, s0, s1, s2, s3, s4, s5, s6, s7,
+        s8, s9, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22, s23, s24, s25,
+        s26, s27, s28, s29, s30, s31,
+    ]
 }
 
 /// The session key: HKDF over the PSK (salt/authenticator) and the DH secret
@@ -136,10 +317,8 @@ fn derive_session_key(
     client_pub: &[u8; 32],
     server_pub: &[u8; 32],
 ) -> [u8; KEY_LEN] {
-    let mut info = Vec::with_capacity(HS_LABEL.len() + 64);
-    info.extend_from_slice(HS_LABEL);
-    info.extend_from_slice(client_pub);
-    info.extend_from_slice(server_pub);
+    let info = build_hs_info(client_pub, server_pub);
+    let _ = handshake_clamp_info_len(info.len() as u64, 84);
     hkdf_sha256_32(psk, dh, &info)
 }
 
@@ -181,16 +360,114 @@ fn agree(
     ))
 }
 
+#[inline(always)]
+const fn hs_transcript_q0(client_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        client_pub[0],
+        client_pub[1],
+        client_pub[2],
+        client_pub[3],
+        client_pub[4],
+        client_pub[5],
+        client_pub[6],
+        client_pub[7],
+        client_pub[8],
+        client_pub[9],
+        client_pub[10],
+        client_pub[11],
+        client_pub[12],
+        client_pub[13],
+        client_pub[14],
+        client_pub[15],
+    ]
+}
+
+#[inline(always)]
+const fn hs_transcript_q1(client_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        client_pub[16],
+        client_pub[17],
+        client_pub[18],
+        client_pub[19],
+        client_pub[20],
+        client_pub[21],
+        client_pub[22],
+        client_pub[23],
+        client_pub[24],
+        client_pub[25],
+        client_pub[26],
+        client_pub[27],
+        client_pub[28],
+        client_pub[29],
+        client_pub[30],
+        client_pub[31],
+    ]
+}
+
+#[inline(always)]
+const fn hs_transcript_q2(server_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        server_pub[0],
+        server_pub[1],
+        server_pub[2],
+        server_pub[3],
+        server_pub[4],
+        server_pub[5],
+        server_pub[6],
+        server_pub[7],
+        server_pub[8],
+        server_pub[9],
+        server_pub[10],
+        server_pub[11],
+        server_pub[12],
+        server_pub[13],
+        server_pub[14],
+        server_pub[15],
+    ]
+}
+
+#[inline(always)]
+const fn hs_transcript_q3(server_pub: &[u8; 32]) -> [u8; 16] {
+    [
+        server_pub[16],
+        server_pub[17],
+        server_pub[18],
+        server_pub[19],
+        server_pub[20],
+        server_pub[21],
+        server_pub[22],
+        server_pub[23],
+        server_pub[24],
+        server_pub[25],
+        server_pub[26],
+        server_pub[27],
+        server_pub[28],
+        server_pub[29],
+        server_pub[30],
+        server_pub[31],
+    ]
+}
+
 /// The bytes both sides bind into every record's AAD: the ephemeral public keys in
 /// a fixed order (client, then server), as THIS side observed them. An active MITM
 /// that relays different ephemerals to each leg produces different transcripts, so
 /// its records fail to open on the far side. The identity handshake binds the same
 /// bytes, which are also what its peers sign.
-pub(crate) fn transcript(client_pub: &[u8; 32], server_pub: &[u8; 32]) -> [u8; 64] {
-    let mut t = [0u8; 64];
-    t[..32].copy_from_slice(client_pub);
-    t[32..].copy_from_slice(server_pub);
-    t
+pub(crate) const fn transcript(client_pub: &[u8; 32], server_pub: &[u8; 32]) -> [u8; 64] {
+    let [c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15] =
+        hs_transcript_q0(client_pub);
+    let [c16, c17, c18, c19, c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31] =
+        hs_transcript_q1(client_pub);
+    let [s0, s1, s2, s3, s4, s5, s6, s7, s8, s9, s10, s11, s12, s13, s14, s15] =
+        hs_transcript_q2(server_pub);
+    let [s16, s17, s18, s19, s20, s21, s22, s23, s24, s25, s26, s27, s28, s29, s30, s31] =
+        hs_transcript_q3(server_pub);
+    [
+        c0, c1, c2, c3, c4, c5, c6, c7, c8, c9, c10, c11, c12, c13, c14, c15, c16, c17, c18, c19,
+        c20, c21, c22, c23, c24, c25, c26, c27, c28, c29, c30, c31, s0, s1, s2, s3, s4, s5, s6, s7,
+        s8, s9, s10, s11, s12, s13, s14, s15, s16, s17, s18, s19, s20, s21, s22, s23, s24, s25,
+        s26, s27, s28, s29, s30, s31,
+    ]
 }
 
 /// Run the client (initiator) side of the handshake over `stream` and return the
@@ -204,7 +481,7 @@ pub fn client_handshake<S: Read + Write>(
     mut stream: S,
     psk: &[u8; KEY_LEN],
 ) -> io::Result<SealedStream<S>> {
-    let (secret, our_pub) = ephemeral();
+    let (secret, our_pub) = ephemeral()?;
     write_hs_msg(&mut stream, &our_pub)?;
     let their_pub = read_hs_msg(&mut stream)?;
     // We are the client: our key is client_pub, theirs is server_pub.
@@ -235,7 +512,7 @@ pub fn server_handshake<S: Read + Write>(
 ) -> io::Result<SealedStream<S>> {
     // The client speaks first.
     let their_pub = read_hs_msg(&mut stream)?;
-    let (secret, our_pub) = ephemeral();
+    let (secret, our_pub) = ephemeral()?;
     write_hs_msg(&mut stream, &our_pub)?;
     // They are the client, we are the server.
     let key = agree(&secret, psk, &their_pub, &their_pub, &our_pub)?;
@@ -252,23 +529,140 @@ mod tests {
     use super::*;
     use std::net::{TcpListener, TcpStream};
 
+    /// Recorded from this crate over the `sha2` crate (0.10.9) on 2026-10-15, before
+    /// it moved to `astream-digest`, and unchanged over it and over the HMAC that
+    /// moved there after it: both ends of a handshake must derive this key, so
+    /// nothing under it may change unless the key does not. The HKDF's own pins (RFC
+    /// 5869, and this same answer from the raw bytes) are astream-digest's; this one
+    /// is the INFO layout's (`build_hs_info`: the label, then the two ephemerals in
+    /// role order), which only this crate builds. Negative control: the ephemerals
+    /// swapped are another key (`transcript_role_order_changes_the_key`), and so is
+    /// another PSK, below.
     #[test]
-    fn hmac_sha256_matches_rfc4231_case2() {
-        // RFC 4231 Test Case 2.
-        let mac = hmac_sha256(b"Jefe", b"what do ya want for nothing?");
-        let expected = hex("5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843");
-        assert_eq!(mac.as_slice(), expected.as_slice());
+    fn the_session_key_is_the_recorded_answer() {
+        let key = derive_session_key(&[9u8; KEY_LEN], &[7u8; 32], &[1u8; 32], &[2u8; 32]);
+        let expected = hex("0d5a777ebe43ec2044188fa05d226c609e80df383b6cfce2b3cfa2bacbc64c24");
+        assert_eq!(key.as_slice(), expected.as_slice());
+        let other = derive_session_key(&[8u8; KEY_LEN], &[7u8; 32], &[1u8; 32], &[2u8; 32]);
+        assert_ne!(other.as_slice(), expected.as_slice());
     }
 
     #[test]
-    fn hkdf_sha256_matches_rfc5869_a1() {
-        // RFC 5869 Appendix A.1 (SHA-256); we emit the first 32 bytes of the OKM.
-        let ikm = [0x0bu8; 22];
-        let salt = hex("000102030405060708090a0b0c");
-        let info = hex("f0f1f2f3f4f5f6f7f8f9");
-        let okm = hkdf_sha256_32(&salt, &ikm, &info);
-        let expected = hex("3cb25f25faacd57a90434f64d0362f2a2d2d0a90cf1a5a4c5db02d56ecc4c5bf3");
-        assert_eq!(okm.as_slice(), expected.as_slice());
+    fn a_bad_magic_version_short_or_low_order_handshake_message_is_refused() {
+        let point = [0x42u8; 32];
+        let good = build_hs_msg(&point);
+        assert_eq!(read_hs_msg(&mut &good[..]).unwrap(), point);
+        let mut rows = Vec::new();
+        for i in 0..HS_MAGIC.len() {
+            let mut bad = good;
+            bad[i] ^= 0x80;
+            rows.push((
+                format!("magic byte {i}"),
+                bad.to_vec(),
+                io::ErrorKind::InvalidData,
+            ));
+        }
+        for ver in [HS_VERSION - 1, HS_VERSION + 1] {
+            let mut bad = good;
+            bad[4] = ver;
+            rows.push((
+                format!("version {ver}"),
+                bad.to_vec(),
+                io::ErrorKind::InvalidData,
+            ));
+        }
+        rows.push((
+            "a short message".to_string(),
+            good[..HS_MSG_LEN - 1].to_vec(),
+            io::ErrorKind::UnexpectedEof,
+        ));
+        for (what, msg, kind) in rows {
+            assert_eq!(
+                read_hs_msg(&mut &msg[..]).unwrap_err().kind(),
+                kind,
+                "{what}"
+            );
+        }
+
+        // u = 0 and u = 1 are small-order points: X25519 against either is zero
+        // whatever our secret, so a peer sending one would choose the DH input of
+        // the session key. Every half, the identity handshake's included, refuses
+        // it before any record.
+        let mut one = [0u8; 32];
+        one[0] = 1;
+        for low in [[0u8; 32], one] {
+            let peer = || crate::tests::Scripted::new(build_hs_msg(&low).to_vec());
+            let psk = [0x42; KEY_LEN];
+            let refusals = vec![
+                ("server", server_handshake(peer(), &psk).err()),
+                ("client", client_handshake(peer(), &psk).err()),
+            ];
+            #[cfg(feature = "identity")]
+            let refusals = {
+                let me = crate::IdentityKeypair::from_seed([3; 32]);
+                let server = crate::server_identity_handshake(peer(), &me, &[me.public()]);
+                let client = crate::client_identity_handshake(peer(), &me, &me.public());
+                let mut all = refusals;
+                all.extend([
+                    ("identity server", server.err()),
+                    ("identity client", client.err()),
+                ]);
+                all
+            };
+            for (side, got) in refusals {
+                let e = got.unwrap_or_else(|| panic!("{side} accepted u = {}", low[0]));
+                assert_eq!(e.kind(), io::ErrorKind::InvalidData, "{side}");
+            }
+        }
+    }
+
+    #[test]
+    fn each_half_seals_under_the_agreed_key_and_transcript_with_a_fresh_ephemeral() {
+        // Pins the forward-secret wire against a scripted peer that holds its own
+        // X25519 secret, as `every_record_aad_is_hello_client_hello_server_direction_seq`
+        // pins the PSK wire: each half seals its first record under
+        // HKDF(psk, X25519, label ‖ client_pub ‖ server_pub) with the AAD
+        // client_pub ‖ server_pub ‖ direction ‖ seq (0x01 client→server, 0x02
+        // server→client), and draws a fresh ephemeral for every handshake.
+        let psk = [0x42; KEY_LEN];
+        let peer = StaticSecret::from([0x5a; 32]);
+        let peer_pub = *PublicKey::from(&peer).as_bytes();
+        let mut ephemerals = Vec::new();
+        for is_client in [true, true, false, false] {
+            let script = crate::tests::Scripted::new(build_hs_msg(&peer_pub).to_vec());
+            let mut half = if is_client {
+                client_handshake(script, &psk)
+            } else {
+                server_handshake(script, &psk)
+            }
+            .unwrap();
+            half.write_all(b"first record").unwrap();
+            let sent = &half.get_ref().sent;
+            let ours = read_hs_msg(&mut &sent[..HS_MSG_LEN]).unwrap();
+            let (client_pub, server_pub, direction) = if is_client {
+                (ours, peer_pub, 0x01)
+            } else {
+                (peer_pub, ours, 0x02)
+            };
+            let dh = peer.diffie_hellman(&PublicKey::from(ours));
+            let key = derive_session_key(&psk, dh.as_bytes(), &client_pub, &server_pub);
+            let aad = [
+                &client_pub[..],
+                &server_pub[..],
+                &[direction][..],
+                &0u64.to_le_bytes()[..],
+            ]
+            .concat();
+            let record = &sent[HS_MSG_LEN + 4..];
+            assert_eq!(
+                crate::open(&key, &aad, record).ok().as_deref(),
+                Some(&b"first record"[..]),
+                "client: {is_client}"
+            );
+            ephemerals.push(ours);
+        }
+        assert_ne!(ephemerals[0], ephemerals[1], "a fresh client ephemeral");
+        assert_ne!(ephemerals[2], ephemerals[3], "a fresh server ephemeral");
     }
 
     #[test]
@@ -328,6 +722,7 @@ mod tests {
     }
 
     fn hex(s: &str) -> Vec<u8> {
+        assert!(s.len().is_multiple_of(2), "an odd hex digit: {s}");
         (0..s.len() / 2)
             .map(|i| u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).unwrap())
             .collect()

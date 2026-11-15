@@ -1,0 +1,13 @@
+[package]
+name = "astream-restore-ops"
+description = "An independent model of a crash-restore region keyframe stride controller, zero-padded physical ring scanner, layout-version migration, dirty-cell coalescing, cold scrollback tiering, and boot-session crash seal verification; no astream runtime crate and no aterm code calls it. aterm's crash-restore region is `aterm-restore`'s, over `astream-wire`'s step records. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }
+astream-digest = { workspace = true }

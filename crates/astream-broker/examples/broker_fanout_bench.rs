@@ -26,7 +26,7 @@
 //!   saturated machine. It is printed because the honest headline is that fan-out to
 //!   many observers is not free for the producer on a shared box.
 //!
-//!   SUBS=64 BENCH_N=20000 cargo run --release -p astream-broker --example broker_fanout_bench
+//!   SUBS=64 BENCH_N=20000 targo --unverified run --release -p astream-broker --example broker_fanout_bench
 
 #[cfg(unix)]
 use astream_broker::{Broker, Client};

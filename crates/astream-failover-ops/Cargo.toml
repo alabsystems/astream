@@ -1,0 +1,12 @@
+[package]
+name = "astream-failover-ops"
+description = "An independent model of an autonomous replicated-tier lease-heartbeat failover daemon, majority quorum witness tally, epoch fencing tokens, divergent-tail catchup, flap dampening, and crash-safe lineage cutover; no astream runtime crate and no aterm code calls it. The shipped quorum election and epoch-fenced promotion are `astream-broker`'s `failover.rs`. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+astream-wire = { workspace = true }

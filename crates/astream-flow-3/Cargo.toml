@@ -1,0 +1,11 @@
+[package]
+name = "astream-flow-3"
+description = "An independent model of adaptive flow control, backpressure horizons, session multiplexing, and replay determinism (shard 3 of 6, batches 65..66); no astream runtime crate and no aterm code calls it. aterm's mail on its bus is `aterm-link`'s, and its `restart` verb, banners and OSC 8 handling are aterm's own code. forbid(unsafe_code)."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+
+[dependencies]
