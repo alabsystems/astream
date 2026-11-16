@@ -121,7 +121,7 @@ clean {
           Nat.le (UInt64.toNat floor) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => floor) (fun _ => seq))))
         (instDecidableUInt64Lt floor seq)
-        (fun _ => Nat.le.refl (UInt64.toNat floor))
+        (fun _ => @Nat.le.refl (UInt64.toNat floor))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem raise_ge_seq : forall (floor : UInt64) (seq : UInt64),
@@ -132,7 +132,7 @@ clean {
             (motive := fun _ => UInt64) d (fun _ => floor) (fun _ => seq))))
         (instDecidableUInt64Lt floor seq)
         (fun hNotLt => Nat.le_of_not_lt hNotLt)
-        (fun _ => Nat.le.refl (UInt64.toNat seq))
+        (fun _ => @Nat.le.refl (UInt64.toNat seq))
 
     theorem bool_true_is_not_false (h : true = false) : False :=
       absurd h (by decide)
@@ -214,7 +214,7 @@ clean {
         Nat.le s.appended 1 :=
       Or.elim hInv
         (fun hZero => Eq.mpr (congrArg (fun x => Nat.le x 1) hZero) (Nat.zero_le 1))
-        (fun hOne => Eq.mpr (congrArg (fun x => Nat.le x 1) hOne.1) (Nat.le.refl 1))
+        (fun hOne => Eq.mpr (congrArg (fun x => Nat.le x 1) hOne.1) (@Nat.le.refl 1))
 
     theorem spec_satisfies_origin_relay_safety :
         Spec ⊨ □ (Lift RelayInv) :=

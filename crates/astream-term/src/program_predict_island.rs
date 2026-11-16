@@ -133,7 +133,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => count))) (UInt64.toNat cap))
         (instDecidableUInt64Lt count cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem init_establishes_inv (s0 : Nat) (cap : UInt64) (s : ProgramSpecState)

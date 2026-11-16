@@ -113,7 +113,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => prop))))
         (instDecidableUInt64Lt cur prop)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem quorum_clamp_le : forall (votes : UInt64) (cap : UInt64),
@@ -123,7 +123,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => votes))) (UInt64.toNat cap))
         (instDecidableUInt64Lt votes cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -139,7 +139,7 @@ clean {
       let hE : Nat.le (UInt64.toNat s.prevEpoch) (UInt64.toNat s.adoptedEpoch) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.adoptedEpoch)) hEqEp)
-          (Nat.le.refl (UInt64.toNat s.adoptedEpoch))
+          (@Nat.le.refl (UInt64.toNat s.adoptedEpoch))
       And.intro hE (zero_u64_le s.quorumVotes s.clusterSize hInit.2.2.1)
 
     theorem electAndPromote_preserves_inv (pe rv : UInt64) (s sNext : FailoverState)

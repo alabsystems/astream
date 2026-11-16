@@ -122,7 +122,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => hi) (fun _ => x))) (UInt64.toNat hi))
         (instDecidableUInt64Lt x hi)
-        (fun _ => Nat.le.refl (UInt64.toNat hi))
+        (fun _ => @Nat.le.refl (UInt64.toNat hi))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem rto_clamp_le_max : forall (cand : UInt64) (lo : UInt64) (hi : UInt64),
@@ -136,7 +136,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem eq_zero_le (a : UInt64) (b : UInt64) (hA : a = 0) :

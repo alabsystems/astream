@@ -101,7 +101,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cols) (fun _ => c))) (UInt64.toNat cols))
         (instDecidableUInt64Lt c cols)
-        (fun _ => Nat.le.refl (UInt64.toNat cols))
+        (fun _ => @Nat.le.refl (UInt64.toNat cols))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem margin_flag_le_one : forall (c : UInt64) (lc : UInt64),
@@ -113,7 +113,7 @@ clean {
             (UInt64.toNat (1 : UInt64)))
         (instDecidableUInt64Lt c lc)
         (fun _ => Nat.zero_le (UInt64.toNat (1 : UInt64)))
-        (fun _ => Nat.le.refl (UInt64.toNat (1 : UInt64)))
+        (fun _ => @Nat.le.refl (UInt64.toNat (1 : UInt64)))
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
         Nat.le (UInt64.toNat x) (UInt64.toNat cap) :=

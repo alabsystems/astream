@@ -105,7 +105,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => sample))))
         (instDecidableUInt64Lt cur sample)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     theorem attenuate_expiry_le_parent (parent_exp child_exp : UInt64) :
@@ -132,7 +132,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => c) (fun _ => p))) (UInt64.toNat c))
         (instDecidableUInt64Lt p c)
-        (fun _ => Nat.le.refl (UInt64.toNat c))
+        (fun _ => @Nat.le.refl (UInt64.toNat c))
         (fun h => Nat.le_of_lt h)
 
     -- TLA+ state variables for a guarded broker connection:

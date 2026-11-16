@@ -108,7 +108,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => raw))) (UInt64.toNat cap))
         (instDecidableUInt64Lt raw cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem budget_ge_floor : forall (flr : UInt64) (scaled : UInt64),
@@ -118,14 +118,14 @@ clean {
           Nat.le (UInt64.toNat flr) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => flr) (fun _ => scaled))))
         (instDecidableUInt64Lt flr scaled)
-        (fun _ => Nat.le.refl (UInt64.toNat flr))
+        (fun _ => @Nat.le.refl (UInt64.toNat flr))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a : UInt64) (b : UInt64) (hEq : a = b) :
       Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : RingScanState) (hInit : Init s) :
       RingScanSafetyInv s :=

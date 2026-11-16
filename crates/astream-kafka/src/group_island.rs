@@ -73,7 +73,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     theorem part_clamp_le_max : forall (req : UInt64) (cap : UInt64),
@@ -83,7 +83,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => req))) (UInt64.toNat cap))
         (instDecidableUInt64Lt req cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun h => Nat.le_of_lt h)
 
     structure GroupCoordState where
@@ -122,7 +122,7 @@ clean {
       let hGenLe : Nat.le (UInt64.toNat s.prevGen) (UInt64.toNat s.curGen) :=
         Eq.mpr (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.curGen)) hInit.1)
           (Eq.mpr (congrArg (fun y => Nat.le (UInt64.toNat initGen) (UInt64.toNat y)) hInit.2.1)
-            (Nat.le.refl (UInt64.toNat initGen)))
+            (@Nat.le.refl (UInt64.toNat initGen)))
       let hPartLe : Nat.le (UInt64.toNat s.partCount) (UInt64.toNat s.maxParts) :=
         Eq.mpr (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.maxParts)) hInit.2.2.1)
           (Nat.zero_le (UInt64.toNat s.maxParts))

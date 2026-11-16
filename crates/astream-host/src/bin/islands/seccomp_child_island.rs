@@ -23,7 +23,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => got))) (UInt64.toNat cap))
         (instDecidableUInt64Lt got cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun h => Nat.le_of_lt h)
 
     end TlaSeccompChild

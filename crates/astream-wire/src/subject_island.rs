@@ -93,7 +93,7 @@ clean {
           Nat.le (UInt64.toNat d) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) dec (fun _ => d) (fun _ => cand))))
         (instDecidableUInt64Lt d cand)
-        (fun _ => Nat.le.refl (UInt64.toNat d))
+        (fun _ => @Nat.le.refl (UInt64.toNat d))
         (fun h => Nat.le_of_lt h)
 
     -- State of the lockstep segment matcher (`Filter::matches` / `Filter::contains`):
@@ -170,7 +170,7 @@ clean {
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun x => Nat.le (UInt64.toNat a) (UInt64.toNat x)) (Eq.symm hEq))
-        (Nat.le.refl (UInt64.toNat a))
+        (@Nat.le.refl (UInt64.toNat a))
 
     theorem init_implies_inv (s : MatchState) (hInit : Init s) : FilterMatchSafetyInv s :=
       And.intro

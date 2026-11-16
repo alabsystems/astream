@@ -118,7 +118,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => req))))
         (instDecidableUInt64Lt cur req)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     -- Term proof that the 4-parameter `causal_step_frontier_isl` is monotone (`>= eff_cur`).
@@ -131,7 +131,7 @@ clean {
             (fun _ => eff_cur)
             (fun _ => _root_.heal_frontier_monotone eff_cur eff_cand))))
         (instDecidableUInt64Le cause_req cause_cut)
-        (fun _ => Nat.le.refl (UInt64.toNat eff_cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat eff_cur))
         (fun _ => heal_frontier_ge_cur eff_cur eff_cand)
 
     -- Tactic proof that `heal_frontier_monotone cur req >= req` (healing satisfies the causal edge).
@@ -154,7 +154,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => b) (fun _ => a))) (UInt64.toNat b))
         (instDecidableUInt64Lt a b)
-        (fun _ => Nat.le.refl (UInt64.toNat b))
+        (fun _ => @Nat.le.refl (UInt64.toNat b))
         (fun h => Nat.le_of_lt h)
 
     -- Tactic proof that `meet_frontier_monotone a b` is the greatest lower bound:

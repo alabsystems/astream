@@ -81,7 +81,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => len))) (UInt64.toNat cap))
         (instDecidableUInt64Lt len cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun h => Nat.le_of_lt h)
 
     -- State of a bounded causal sync index and its set-recomputed projection:

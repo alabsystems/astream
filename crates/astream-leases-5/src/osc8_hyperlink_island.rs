@@ -78,7 +78,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => m) (fun _ => u))) (UInt64.toNat m))
         (instDecidableUInt64Lt u m)
-        (fun _ => Nat.le.refl (UInt64.toNat m))
+        (fun _ => @Nat.le.refl (UInt64.toNat m))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem slot_clamp_le : forall (c : UInt64) (m : UInt64),
@@ -88,7 +88,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => m) (fun _ => c))) (UInt64.toNat m))
         (instDecidableUInt64Lt c m)
-        (fun _ => Nat.le.refl (UInt64.toNat m))
+        (fun _ => @Nat.le.refl (UInt64.toNat m))
         (fun hLt => Nat.le_of_lt hLt)
 
     structure Osc8State where

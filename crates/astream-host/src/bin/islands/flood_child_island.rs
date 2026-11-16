@@ -25,7 +25,7 @@ clean {
           Nat.le (UInt64.toNat step) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => step) (fun _ => next))))
         (instDecidableUInt64Lt step next)
-        (fun _ => Nat.le.refl (UInt64.toNat step))
+        (fun _ => @Nat.le.refl (UInt64.toNat step))
         (fun h => Nat.le_of_lt h)
 
     end TlaFloodChild

@@ -93,7 +93,7 @@ clean {
           Nat.le (UInt64.toNat fl) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => fl) (fun _ => n))))
         (instDecidableUInt64Lt fl n)
-        (fun _ => Nat.le.refl (UInt64.toNat fl))
+        (fun _ => @Nat.le.refl (UInt64.toNat fl))
         (fun h => Nat.le_of_lt h)
 
     -- State of the partition router:
@@ -141,7 +141,7 @@ clean {
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun x => Nat.le (UInt64.toNat a) (UInt64.toNat x)) (Eq.symm hEq))
-        (Nat.le.refl (UInt64.toNat a))
+        (@Nat.le.refl (UInt64.toNat a))
 
     theorem zero_le_uint64 (u : UInt64) (hZero : u = 0) :
         forall (m : UInt64), Nat.le (UInt64.toNat u) (UInt64.toNat m) :=

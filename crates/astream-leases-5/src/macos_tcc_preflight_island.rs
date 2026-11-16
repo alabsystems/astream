@@ -90,7 +90,7 @@ clean {
             (motive := fun _ => UInt64) d (fun _ => (0 : UInt64)) (fun _ => (1 : UInt64)))) (UInt64.toNat 2))
         (instDecidableUInt64Lt fda 1)
         (fun _ => Nat.zero_le (UInt64.toNat 2))
-        (fun _ => @Nat.le.step 1 1 (Nat.le.refl 1))
+        (fun _ => @Nat.le.step 1 1 (@Nat.le.refl 1))
 
     theorem class_ge2_le_two (sc : UInt64) (r1 : UInt64)
         (h1 : Nat.le (UInt64.toNat r1) (UInt64.toNat 2)) :
@@ -100,7 +100,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => (2 : UInt64)) (fun _ => r1))) (UInt64.toNat 2))
         (instDecidableUInt64Lt sc 2)
-        (fun _ => Nat.le.refl (UInt64.toNat 2))
+        (fun _ => @Nat.le.refl (UInt64.toNat 2))
         (fun _ => h1)
 
     theorem class0_le_two (sc : UInt64) (rnz : UInt64)
@@ -127,14 +127,14 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a : UInt64) (b : UInt64) (hEq : a = b) :
       Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     structure PrivacyGateState where
       prevEpoch : UInt64

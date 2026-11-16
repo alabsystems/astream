@@ -153,7 +153,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => req))))
         (instDecidableUInt64Lt cur req)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     -- Least-upper-bound property of `_root_.group_commit_monotone`:
@@ -577,7 +577,7 @@ clean {
         (fun (d : Decidable (LT.lt hw pubSeq)) =>
           Nat.le (UInt64.toNat hw) (UInt64.toNat (@ite UInt64 (LT.lt hw pubSeq) d pubSeq hw)))
         (instDecidableUInt64Lt hw pubSeq)
-        (fun _ => Nat.le.refl (UInt64.toNat hw))
+        (fun _ => @Nat.le.refl (UInt64.toNat hw))
         (fun hLt => Nat.le_of_lt hLt)
 
     -- A step that keeps the will and sets the high water to `hw` keeps `willSeq < hw`.
@@ -724,7 +724,7 @@ clean {
           Nat.le (UInt64.toNat base) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => base) (fun _ => req))))
         (instDecidableUInt64Lt base req)
-        (fun _ => Nat.le.refl (UInt64.toNat base))
+        (fun _ => @Nat.le.refl (UInt64.toNat base))
         (fun h => Nat.le_of_lt h)
 
     -- Abstract control-plane state (live principal bindings, pending wills, and
@@ -805,7 +805,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => ack) (fun _ => head))) (UInt64.toNat ack))
         (instDecidableUInt64Lt head ack)
-        (fun _ => Nat.le.refl (UInt64.toNat ack))
+        (fun _ => @Nat.le.refl (UInt64.toNat ack))
         (fun h => Nat.le_of_lt h)
 
     theorem epoch_advance_ge_cur : forall (cur : UInt64) (req : UInt64),
@@ -815,7 +815,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => req))))
         (instDecidableUInt64Lt cur req)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     theorem replica_ack_ge_cur : forall (cur : UInt64) (new_ack : UInt64),
@@ -825,7 +825,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => ack))))
         (instDecidableUInt64Lt cur ack)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     def fenced_replica_watermark_isl (leader_epoch req_epoch primary_head cur_ack cand_ack : UInt64) : UInt64 :=
@@ -991,7 +991,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => new_h))))
         (instDecidableUInt64Lt cur new_h)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     theorem credit_horizon_lub (cur req bound : UInt64)
@@ -1036,7 +1036,7 @@ clean {
               (_root_.credit_horizon_monotone sent (_root_.committed_watermark hor cand))
               sent))))
         (instDecidableUInt64Le ack sent)
-        (fun _ => Nat.le.refl (UInt64.toNat sent))
+        (fun _ => @Nat.le.refl (UInt64.toNat sent))
         (fun _ => Decidable.casesOn
           (motive := fun (d2 : Decidable (LT.lt sent hor)) =>
             Nat.le (UInt64.toNat sent) (UInt64.toNat (Decidable.casesOn
@@ -1044,7 +1044,7 @@ clean {
               (fun _ => sent)
               (fun _ => _root_.credit_horizon_monotone sent (_root_.committed_watermark hor cand)))))
           (instDecidableUInt64Lt sent hor)
-          (fun _ => Nat.le.refl (UInt64.toNat sent))
+          (fun _ => @Nat.le.refl (UInt64.toNat sent))
           (fun _ => credit_horizon_ge_cur sent (_root_.committed_watermark hor cand)))
 
     structure WindowState where

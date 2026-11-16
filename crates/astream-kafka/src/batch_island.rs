@@ -73,7 +73,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem clamp_fetch_le_max : forall (avail : UInt64) (maxB : UInt64),
@@ -83,7 +83,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => maxB) (fun _ => avail))) (UInt64.toNat maxB))
         (instDecidableUInt64Lt avail maxB)
-        (fun _ => Nat.le.refl (UInt64.toNat maxB))
+        (fun _ => @Nat.le.refl (UInt64.toNat maxB))
         (fun hLt => Nat.le_of_lt hLt)
 
     -- ========================================================================
@@ -130,7 +130,7 @@ clean {
       let hBaseLeHw : Nat.le (UInt64.toNat s.baseOffset) (UInt64.toNat s.highWatermark) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.highWatermark)) hEqHw)
-          (Nat.le.refl (UInt64.toNat s.highWatermark))
+          (@Nat.le.refl (UInt64.toNat s.highWatermark))
       let hZeroLe : Nat.le (UInt64.toNat (0 : UInt64)) (UInt64.toNat s.maxFetchCap) :=
         Nat.zero_le (UInt64.toNat s.maxFetchCap)
       let hFetchLe : Nat.le (UInt64.toNat s.lastFetchBytes) (UInt64.toNat s.maxFetchCap) :=

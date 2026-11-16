@@ -93,7 +93,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun h => Nat.le_of_lt h)
 
     -- State of a single partition's log offset progression:
@@ -149,7 +149,7 @@ clean {
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun x => Nat.le (UInt64.toNat a) (UInt64.toNat x)) (Eq.symm hEq))
-        (Nat.le.refl (UInt64.toNat a))
+        (@Nat.le.refl (UInt64.toNat a))
 
     theorem init_implies_inv (s : LogState) (hInit : Init s) : LogOffsetSafetyInv s :=
       uint64_eq_le s.baseOffset s.hwm (Eq.trans hInit.2.1 (Eq.symm hInit.2.2))

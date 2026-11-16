@@ -25,7 +25,7 @@ clean {
           Nat.le (UInt64.toNat lines) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => lines) (fun _ => next))))
         (instDecidableUInt64Lt lines next)
-        (fun _ => Nat.le.refl (UInt64.toNat lines))
+        (fun _ => @Nat.le.refl (UInt64.toNat lines))
         (fun h => Nat.le_of_lt h)
 
     end TlaEchoChild

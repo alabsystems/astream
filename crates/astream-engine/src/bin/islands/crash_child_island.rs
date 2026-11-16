@@ -25,7 +25,7 @@ clean {
           Nat.le (UInt64.toNat seq) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => seq) (fun _ => next))))
         (instDecidableUInt64Lt seq next)
-        (fun _ => Nat.le.refl (UInt64.toNat seq))
+        (fun _ => @Nat.le.refl (UInt64.toNat seq))
         (fun h => Nat.le_of_lt h)
 
     end TlaCrashChild

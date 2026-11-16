@@ -119,7 +119,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => mw) (fun _ => w))) (UInt64.toNat mw))
         (instDecidableUInt64Lt w mw)
-        (fun _ => Nat.le.refl (UInt64.toNat mw))
+        (fun _ => @Nat.le.refl (UInt64.toNat mw))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem spacer_clamp_le_end : forall (nc : UInt64) (ec : UInt64),
@@ -129,7 +129,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => ec) (fun _ => nc))) (UInt64.toNat ec))
         (instDecidableUInt64Lt nc ec)
-        (fun _ => Nat.le.refl (UInt64.toNat ec))
+        (fun _ => @Nat.le.refl (UInt64.toNat ec))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (a : UInt64) (b : UInt64) (hZero : a = (0 : UInt64)) :

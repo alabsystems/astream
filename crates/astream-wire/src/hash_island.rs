@@ -394,7 +394,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_idx) (fun _ => idx))) (UInt64.toNat max_idx))
         (instDecidableUInt64Lt idx max_idx)
-        (fun _ => Nat.le.refl (UInt64.toNat max_idx))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_idx))
         (fun h => Nat.le_of_lt h)
 
     -- State of the Slicing-by-8 streaming CRC-32 engine:

@@ -88,14 +88,14 @@ clean {
           Nat.le (UInt64.toNat min_fd)
             (UInt64.toNat (@ite UInt64 (LT.lt min_fd fd) d fd min_fd)))
         (instDecidableUInt64Lt min_fd fd)
-        (fun _ => Nat.le.refl (UInt64.toNat min_fd))
+        (fun _ => @Nat.le.refl (UInt64.toNat min_fd))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a b : UInt64) (hEq : a = b) :
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : FdFloorState) (hInit : Init s) :
         StdioFdFloorInv s :=

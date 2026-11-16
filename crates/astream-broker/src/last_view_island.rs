@@ -102,7 +102,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => vis))))
         (instDecidableUInt64Lt cur vis)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem avail_advance_ge_vis : forall (cur : UInt64) (vis : UInt64),
@@ -113,7 +113,7 @@ clean {
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => vis))))
         (instDecidableUInt64Lt cur vis)
         (fun hNotLt => Nat.le_of_not_lt hNotLt)
-        (fun _ => Nat.le.refl (UInt64.toNat vis))
+        (fun _ => @Nat.le.refl (UInt64.toNat vis))
 
     theorem prune_clamp_le_quantum : forall (steps : UInt64) (max_work : UInt64),
         Nat.le (UInt64.toNat (_root_.last_view_prune_clamp steps max_work)) (UInt64.toNat max_work) :=
@@ -122,7 +122,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_work) (fun _ => steps))) (UInt64.toNat max_work))
         (instDecidableUInt64Lt steps max_work)
-        (fun _ => Nat.le.refl (UInt64.toNat max_work))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_work))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem admitted_ge_avail (avail req : UInt64)
@@ -352,7 +352,7 @@ clean {
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat sNext.avail)) hAct.2.2.2.2.2.1)
           (Eq.mpr
             (congrArg (fun x => Nat.le (UInt64.toNat s.avail) (UInt64.toNat x)) hAct.2.1)
-            (Nat.le.refl (UInt64.toNat s.avail)))
+            (@Nat.le.refl (UInt64.toNat s.avail)))
       let hPrune : Nat.le (UInt64.toNat sNext.lastPruneSteps) (UInt64.toNat (64 : UInt64)) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat (64 : UInt64))) hAct.2.2.2.2.2.2.2)

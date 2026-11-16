@@ -104,7 +104,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem leaves_adv_ge : forall (cur : UInt64) (prop : UInt64),
@@ -114,7 +114,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => prop))))
         (instDecidableUInt64Lt cur prop)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -129,7 +129,7 @@ clean {
       let hL : Nat.le (UInt64.toNat s.prevLeaves) (UInt64.toNat s.leafCount) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.leafCount)) hEq)
-          (Nat.le.refl (UInt64.toNat s.leafCount))
+          (@Nat.le.refl (UInt64.toNat s.leafCount))
       And.intro (zero_u64_le s.activePeaks s.maxPeaks hInit.1) hL
 
     theorem appendLeaf_preserves_inv (rp nl : UInt64) (s sNext : MmrState)

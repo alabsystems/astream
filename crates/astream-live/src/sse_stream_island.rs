@@ -112,7 +112,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cur))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cur cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem clamp_blocks_le_max : forall (blocks : UInt64) (max_b : UInt64),
@@ -122,7 +122,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_b) (fun _ => blocks))) (UInt64.toNat max_b))
         (instDecidableUInt64Lt blocks max_b)
-        (fun _ => Nat.le.refl (UInt64.toNat max_b))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_b))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_le_cap (a : UInt64) (cap : UInt64) (hZero : a = 0) :

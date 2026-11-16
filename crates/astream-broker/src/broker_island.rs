@@ -89,7 +89,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_batch) (fun _ => queued))) (UInt64.toNat max_batch))
         (instDecidableUInt64Lt queued max_batch)
-        (fun _ => Nat.le.refl (UInt64.toNat max_batch))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_batch))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (a b : UInt64) (hZero : a = 0) :

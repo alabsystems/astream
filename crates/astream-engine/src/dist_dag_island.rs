@@ -75,7 +75,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => prop))))
         (instDecidableUInt64Lt cur prop)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem winner_min_le_cur (cur cand : UInt64) :
@@ -85,7 +85,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))) (UInt64.toNat cur))
         (instDecidableUInt64Lt cand cur)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     -- ========================================================================
@@ -134,13 +134,13 @@ clean {
       let hL : Nat.le (UInt64.toNat s.prevExpiry) (UInt64.toNat s.leaseExpiry) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.leaseExpiry)) hEqExp)
-          (Nat.le.refl (UInt64.toNat s.leaseExpiry))
+          (@Nat.le.refl (UInt64.toNat s.leaseExpiry))
       let hEqWin : s.winnerOffset = s.maxOffset :=
         Eq.trans hInit.2.2.1 (Eq.symm hInit.2.2.2)
       let hW : Nat.le (UInt64.toNat s.winnerOffset) (UInt64.toNat s.maxOffset) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.maxOffset)) hEqWin)
-          (Nat.le.refl (UInt64.toNat s.maxOffset))
+          (@Nat.le.refl (UInt64.toNat s.maxOffset))
       And.intro hL hW
 
     theorem acquireLease_preserves_inv (pe : UInt64) (s sNext : DistDagState)

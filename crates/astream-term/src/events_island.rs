@@ -105,14 +105,14 @@ clean {
             (UInt64.toNat (Decidable.casesOn
               (motive := fun _ => UInt64) d (fun _ => cur_offset) (fun _ => next_offset))))
         (instDecidableUInt64Lt cur_offset next_offset)
-        (fun _ => Nat.le.refl (UInt64.toNat cur_offset))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur_offset))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a : UInt64) (b : UInt64) (hEq : a = b) :
       Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat a) (UInt64.toNat x)) (Eq.symm hEq))
-        (Nat.le.refl (UInt64.toNat a))
+        (@Nat.le.refl (UInt64.toNat a))
 
     theorem init_establishes_inv (s : ClassifierState) (hInit : Init s) :
       ClassifierOffsetMonotoneInv s :=

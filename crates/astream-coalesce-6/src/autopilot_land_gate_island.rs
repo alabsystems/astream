@@ -118,7 +118,7 @@ clean {
               (motive := fun _ => UInt64) d2 (fun _ => (1 : UInt64)) (fun _ => (0 : UInt64))))
               (UInt64.toNat (1 : UInt64)))
           (instDecidableUInt64Lt dv 1)
-          (fun _ => Nat.le.refl (UInt64.toNat (1 : UInt64)))
+          (fun _ => @Nat.le.refl (UInt64.toNat (1 : UInt64)))
           (fun _ => Nat.zero_le (UInt64.toNat (1 : UInt64))))
 
     theorem turn_clamp_le : forall (t : UInt64) (cap : UInt64),
@@ -128,7 +128,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => t))) (UInt64.toNat cap))
         (instDecidableUInt64Lt t cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :

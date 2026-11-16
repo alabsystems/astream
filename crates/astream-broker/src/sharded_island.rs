@@ -89,7 +89,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => shards) (fun _ => idx))) (UInt64.toNat shards))
         (instDecidableUInt64Lt idx shards)
-        (fun _ => Nat.le.refl (UInt64.toNat shards))
+        (fun _ => @Nat.le.refl (UInt64.toNat shards))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (a b : UInt64) (hZero : a = 0) :

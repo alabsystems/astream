@@ -100,7 +100,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_calls) (fun _ => proposed))) (UInt64.toNat max_calls))
         (instDecidableUInt64Lt proposed max_calls)
-        (fun _ => Nat.le.refl (UInt64.toNat max_calls))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_calls))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (x : UInt64) : Nat.le (UInt64.toNat 0) (UInt64.toNat x) :=

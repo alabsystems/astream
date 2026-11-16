@@ -129,7 +129,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem cursor_clamp_le : forall (cand : UInt64) (cap : UInt64),
@@ -139,7 +139,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -187,7 +187,7 @@ clean {
       let hW : Nat.le (UInt64.toNat sNext.cellWidth) (UInt64.toNat sNext.maxWidth) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat sNext.maxWidth)) hEqMax)
-          (Nat.le.refl (UInt64.toNat sNext.maxWidth))
+          (@Nat.le.refl (UInt64.toNat sNext.maxWidth))
       let hC1 : Nat.le (UInt64.toNat sNext.cursorCol) (UInt64.toNat s.lineEnd) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.lineEnd)) hAct.2.2.1)

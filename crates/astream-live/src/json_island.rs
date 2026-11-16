@@ -102,7 +102,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_depth) (fun _ => requested))) (UInt64.toNat max_depth))
         (instDecidableUInt64Lt requested max_depth)
-        (fun _ => Nat.le.refl (UInt64.toNat max_depth))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_depth))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (a : UInt64) (b : UInt64) (hZero : a = (0 : UInt64)) :

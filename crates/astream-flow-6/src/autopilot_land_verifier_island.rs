@@ -106,7 +106,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => raw))) (UInt64.toNat cap))
         (instDecidableUInt64Lt raw cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem clamp_elapsed_le_window : forall (raw : UInt64) (win : UInt64),
@@ -116,7 +116,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => win) (fun _ => raw))) (UInt64.toNat win))
         (instDecidableUInt64Lt raw win)
-        (fun _ => Nat.le.refl (UInt64.toNat win))
+        (fun _ => @Nat.le.refl (UInt64.toNat win))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem init_establishes_inv (s : LandState) (hInit : Init s) :

@@ -98,7 +98,7 @@ clean {
           Nat.le (UInt64.toNat a) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => a) (fun _ => b))))
         (instDecidableUInt64Lt a b)
-        (fun _ => Nat.le.refl (UInt64.toNat a))
+        (fun _ => @Nat.le.refl (UInt64.toNat a))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem head_advance_le_bound (a b : UInt64)
@@ -110,7 +110,7 @@ clean {
             (motive := fun _ => UInt64) d (fun _ => a) (fun _ => b))) (UInt64.toNat b))
         (instDecidableUInt64Lt a b)
         (fun _ => hA)
-        (fun _ => Nat.le.refl (UInt64.toNat b))
+        (fun _ => @Nat.le.refl (UInt64.toNat b))
 
     theorem skip_clamp_le_vis : forall (cand : UInt64) (vis : UInt64),
         Nat.le (UInt64.toNat (_root_.tail_skip_clamp cand vis)) (UInt64.toNat vis) :=
@@ -119,14 +119,14 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => vis) (fun _ => cand))) (UInt64.toNat vis))
         (instDecidableUInt64Lt cand vis)
-        (fun _ => Nat.le.refl (UInt64.toNat vis))
+        (fun _ => @Nat.le.refl (UInt64.toNat vis))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a b : UInt64) (hEq : a = b) :
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem matched_branch_le_vis (curMatched visNext : UInt64)
         (hBound : Nat.le (UInt64.toNat curMatched) (UInt64.toNat visNext))

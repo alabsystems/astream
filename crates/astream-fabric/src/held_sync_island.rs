@@ -116,15 +116,15 @@ clean {
               (fun _ => rep_base)
               (fun _ => ldr_base))))
           (instDecidableUInt64Lt rep_base ldr_base)
-          (fun _ => Nat.le.refl (UInt64.toNat rep_base))
+          (fun _ => @Nat.le.refl (UInt64.toNat rep_base))
           (fun hLt => Nat.le_of_lt hLt))
-        (fun _ => Nat.le.refl (UInt64.toNat rep_base))
+        (fun _ => @Nat.le.refl (UInt64.toNat rep_base))
 
     theorem uint64_eq_le (a : UInt64) (b : UInt64) (hEq : a = b) :
       Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : HeldSyncState) (hInit : Init s) :
       HeldSyncMonotoneInv s :=

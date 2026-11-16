@@ -109,7 +109,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => raw))) (UInt64.toNat cap))
         (instDecidableUInt64Lt raw cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem epoch_monotone : forall (prev : UInt64) (cand : UInt64),
@@ -119,7 +119,7 @@ clean {
           Nat.le (UInt64.toNat prev) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => prev) (fun _ => cand))))
         (instDecidableUInt64Lt prev cand)
-        (fun _ => Nat.le.refl (UInt64.toNat prev))
+        (fun _ => @Nat.le.refl (UInt64.toNat prev))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_le_cap (a : UInt64) (cap : UInt64) (hZero : a = 0) :

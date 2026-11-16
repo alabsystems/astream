@@ -99,7 +99,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => h) (fun _ => c))) (UInt64.toNat h))
         (instDecidableUInt64Lt c h)
-        (fun _ => Nat.le.refl (UInt64.toNat h))
+        (fun _ => @Nat.le.refl (UInt64.toNat h))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem wakes_clamp_le : forall (w : UInt64) (p : UInt64),
@@ -109,7 +109,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => p) (fun _ => w))) (UInt64.toNat p))
         (instDecidableUInt64Lt w p)
-        (fun _ => Nat.le.refl (UInt64.toNat p))
+        (fun _ => @Nat.le.refl (UInt64.toNat p))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :

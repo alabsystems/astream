@@ -107,7 +107,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem seq_clamp_le_max : forall (src : UInt64) (maxSeq : UInt64),
@@ -117,14 +117,14 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => maxSeq) (fun _ => src))) (UInt64.toNat maxSeq))
         (instDecidableUInt64Lt src maxSeq)
-        (fun _ => Nat.le.refl (UInt64.toNat maxSeq))
+        (fun _ => @Nat.le.refl (UInt64.toNat maxSeq))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a b : UInt64) (hEq : a = b) :
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : FederationState) (hInit : Init s) :
         FederationInv s :=

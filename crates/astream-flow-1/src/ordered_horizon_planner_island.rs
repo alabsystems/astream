@@ -102,7 +102,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) dec (fun _ => o) (fun _ => d))) (UInt64.toNat o))
         (instDecidableUInt64Lt d o)
-        (fun _ => Nat.le.refl (UInt64.toNat o))
+        (fun _ => @Nat.le.refl (UInt64.toNat o))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem window_clamp_le : forall (w : UInt64) (cap : UInt64),
@@ -112,7 +112,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) dec (fun _ => cap) (fun _ => w))) (UInt64.toNat cap))
         (instDecidableUInt64Lt w cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :

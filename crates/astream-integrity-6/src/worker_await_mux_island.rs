@@ -112,7 +112,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => prop))))
         (instDecidableUInt64Lt cur prop)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem watch_clamp_le : forall (cand : UInt64) (cap : UInt64),
@@ -122,7 +122,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -137,7 +137,7 @@ clean {
       let hR : Nat.le (UInt64.toNat s.seenRev) (UInt64.toNat s.latestRev) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.latestRev)) hEq)
-          (Nat.le.refl (UInt64.toNat s.latestRev))
+          (@Nat.le.refl (UInt64.toNat s.latestRev))
       And.intro hR (zero_u64_le s.watchedCount s.maxWatched hInit.2.2.1)
 
     theorem observeTransition_preserves_inv (pr nc : UInt64) (s sNext : WorkerMuxState)
@@ -173,7 +173,7 @@ clean {
       let hR : Nat.le (UInt64.toNat sNext.seenRev) (UInt64.toNat sNext.latestRev) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat sNext.latestRev)) hEq)
-          (Nat.le.refl (UInt64.toNat sNext.latestRev))
+          (@Nat.le.refl (UInt64.toNat sNext.latestRev))
       let hW1 : Nat.le (UInt64.toNat sNext.watchedCount) (UInt64.toNat s.maxWatched) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.maxWatched)) hAct.2.2.1)

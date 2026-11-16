@@ -104,7 +104,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) dec (fun _ => cap) (fun _ => d))) (UInt64.toNat cap))
         (instDecidableUInt64Lt d cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem expiry_narrow_le : forall (ce : UInt64) (pe : UInt64),
@@ -114,7 +114,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) dec (fun _ => pe) (fun _ => ce))) (UInt64.toNat pe))
         (instDecidableUInt64Lt ce pe)
-        (fun _ => Nat.le.refl (UInt64.toNat pe))
+        (fun _ => @Nat.le.refl (UInt64.toNat pe))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -130,7 +130,7 @@ clean {
       let hE : Nat.le (UInt64.toNat s.childExpiryMs) (UInt64.toNat s.parentExpiryMs) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.parentExpiryMs)) hEqExp)
-          (Nat.le.refl (UInt64.toNat s.parentExpiryMs))
+          (@Nat.le.refl (UInt64.toNat s.parentExpiryMs))
       And.intro (zero_u64_le s.chainDepth s.maxDepth hInit.1) hE
 
     theorem attenuate_preserves_inv (rd ce : UInt64) (s sNext : MacaroonState)

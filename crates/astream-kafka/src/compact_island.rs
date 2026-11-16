@@ -74,7 +74,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => len))) (UInt64.toNat cap))
         (instDecidableUInt64Lt len cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem clamp_decompress_le_cap : forall (decLen : UInt64) (maxCap : UInt64),
@@ -84,7 +84,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => maxCap) (fun _ => decLen))) (UInt64.toNat maxCap))
         (instDecidableUInt64Lt decLen maxCap)
-        (fun _ => Nat.le.refl (UInt64.toNat maxCap))
+        (fun _ => @Nat.le.refl (UInt64.toNat maxCap))
         (fun hLt => Nat.le_of_lt hLt)
 
     -- ========================================================================

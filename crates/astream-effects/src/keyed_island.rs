@@ -98,7 +98,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => tape_len) (fun _ => requested))) (UInt64.toNat tape_len))
         (instDecidableUInt64Lt requested tape_len)
-        (fun _ => Nat.le.refl (UInt64.toNat tape_len))
+        (fun _ => @Nat.le.refl (UInt64.toNat tape_len))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (a : UInt64) (b : UInt64) (hZero : a = (0 : UInt64)) :

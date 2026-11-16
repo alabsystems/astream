@@ -100,7 +100,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => end_pos) (fun _ => proposed_begin))) (UInt64.toNat end_pos))
         (instDecidableUInt64Lt proposed_begin end_pos)
-        (fun _ => Nat.le.refl (UInt64.toNat end_pos))
+        (fun _ => @Nat.le.refl (UInt64.toNat end_pos))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (x : UInt64) : Nat.le (UInt64.toNat 0) (UInt64.toNat x) :=

@@ -114,7 +114,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem clamp_le_durable : forall (raw : UInt64) (dur : UInt64),
@@ -124,7 +124,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => dur) (fun _ => raw))) (UInt64.toNat dur))
         (instDecidableUInt64Lt raw dur)
-        (fun _ => Nat.le.refl (UInt64.toNat dur))
+        (fun _ => @Nat.le.refl (UInt64.toNat dur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_le_cap (a : UInt64) (cap : UInt64) (hZero : a = 0) :

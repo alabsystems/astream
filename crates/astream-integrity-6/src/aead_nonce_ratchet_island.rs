@@ -111,7 +111,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => prop))))
         (instDecidableUInt64Lt cur prop)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem seq_clamp_le : forall (cand : UInt64) (cap : UInt64),
@@ -121,7 +121,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -136,7 +136,7 @@ clean {
       let hE : Nat.le (UInt64.toNat s.prevEpoch) (UInt64.toNat s.curEpoch) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.curEpoch)) hEq)
-          (Nat.le.refl (UInt64.toNat s.curEpoch))
+          (@Nat.le.refl (UInt64.toNat s.curEpoch))
       And.intro hE (zero_u64_le s.frameSeq s.epochCap hInit.2.2.1)
 
     theorem sealFrame_preserves_inv (ns : UInt64) (s sNext : NonceRatchetState)

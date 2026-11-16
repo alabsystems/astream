@@ -78,7 +78,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => t) (fun _ => f))) (UInt64.toNat t))
         (instDecidableUInt64Lt f t)
-        (fun _ => Nat.le.refl (UInt64.toNat t))
+        (fun _ => @Nat.le.refl (UInt64.toNat t))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem resume_ge_low : forall (low : UInt64) (res : UInt64),
@@ -88,7 +88,7 @@ clean {
           Nat.le (UInt64.toNat low) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => low) (fun _ => res))))
         (instDecidableUInt64Lt low res)
-        (fun _ => Nat.le.refl (UInt64.toNat low))
+        (fun _ => @Nat.le.refl (UInt64.toNat low))
         (fun hLt => Nat.le_of_lt hLt)
 
     structure DiskRoomState where

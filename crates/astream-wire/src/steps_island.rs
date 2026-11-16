@@ -93,7 +93,7 @@ clean {
           Nat.le (UInt64.toNat v) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => v) (fun _ => n))))
         (instDecidableUInt64Lt v n)
-        (fun _ => Nat.le.refl (UInt64.toNat v))
+        (fun _ => @Nat.le.refl (UInt64.toNat v))
         (fun h => Nat.le_of_lt h)
 
     -- State of `scan_steps_from`:
@@ -170,7 +170,7 @@ clean {
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : ScanState) (hInit : Init s) : StepScanSafetyInv s :=
       let hEq : s.validLen = s.scanPos := Eq.trans hInit.2.1 (Eq.symm hInit.2.2)

@@ -111,7 +111,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem epoch_adv_ge : forall (cur : UInt64) (prop : UInt64),
@@ -121,7 +121,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => prop))))
         (instDecidableUInt64Lt cur prop)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -136,7 +136,7 @@ clean {
       let hE : Nat.le (UInt64.toNat s.confirmedEpoch) (UInt64.toNat s.issuedEpoch) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat s.issuedEpoch)) hEq)
-          (Nat.le.refl (UInt64.toNat s.issuedEpoch))
+          (@Nat.le.refl (UInt64.toNat s.issuedEpoch))
       And.intro (zero_u64_le s.unconfirmedKeys s.maxUnconfirmed hInit.1) hE
 
     theorem predictKey_preserves_inv (nk pi : UInt64) (s sNext : EchoFenceState)
@@ -171,7 +171,7 @@ clean {
       let hE : Nat.le (UInt64.toNat sNext.confirmedEpoch) (UInt64.toNat sNext.issuedEpoch) :=
         Eq.mpr
           (congrArg (fun x => Nat.le (UInt64.toNat x) (UInt64.toNat sNext.issuedEpoch)) hEq)
-          (Nat.le.refl (UInt64.toNat sNext.issuedEpoch))
+          (@Nat.le.refl (UInt64.toNat sNext.issuedEpoch))
       And.intro (zero_u64_le sNext.unconfirmedKeys sNext.maxUnconfirmed hAct.1) hE
 
     theorem next_preserves_inv (s sNext : EchoFenceState)

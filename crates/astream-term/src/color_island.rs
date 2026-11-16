@@ -119,7 +119,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => max_val) (fun _ => val))) (UInt64.toNat max_val))
         (instDecidableUInt64Lt val max_val)
-        (fun _ => Nat.le.refl (UInt64.toNat max_val))
+        (fun _ => @Nat.le.refl (UInt64.toNat max_val))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem combining_clamp_le_cap : forall (len : UInt64) (cap : UInt64),
@@ -129,7 +129,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => len))) (UInt64.toNat cap))
         (instDecidableUInt64Lt len cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_zero_le (a : UInt64) (b : UInt64) (hZero : a = (0 : UInt64)) :

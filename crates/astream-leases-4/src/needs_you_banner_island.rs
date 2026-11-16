@@ -121,7 +121,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => cand))) (UInt64.toNat cap))
         (instDecidableUInt64Lt cand cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem advance_ge_cur : forall (cur : UInt64) (cand : UInt64),
@@ -131,7 +131,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_u64_le (x : UInt64) (cap : UInt64) (hZero : x = (0 : UInt64)) :
@@ -144,7 +144,7 @@ clean {
         Nat.le (UInt64.toNat x) (UInt64.toNat y) :=
       Eq.mpr
         (congrArg (fun (v : UInt64) => Nat.le (UInt64.toNat v) (UInt64.toNat y)) hEq)
-        (Nat.le.refl (UInt64.toNat y))
+        (@Nat.le.refl (UInt64.toNat y))
 
     theorem init_establishes_inv (maxItems : UInt64) (s : BannerState)
         (hInit : Init maxItems s) : NeedsYouSafetyInv s :=

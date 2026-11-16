@@ -89,14 +89,14 @@ clean {
           Nat.le (UInt64.toNat seal_end) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => seal_end) (fun _ => floor))))
         (instDecidableUInt64Lt seal_end floor)
-        (fun _ => Nat.le.refl (UInt64.toNat seal_end))
+        (fun _ => @Nat.le.refl (UInt64.toNat seal_end))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem uint64_eq_le (a b : UInt64) (hEq : a = b) :
         Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : RecoverUnitState) (hInit : Init s) :
         RecoverUnitStartInv s :=

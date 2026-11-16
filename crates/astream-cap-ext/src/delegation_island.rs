@@ -114,7 +114,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cap) (fun _ => raw))) (UInt64.toNat cap))
         (instDecidableUInt64Lt raw cap)
-        (fun _ => Nat.le.refl (UInt64.toNat cap))
+        (fun _ => @Nat.le.refl (UInt64.toNat cap))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem exp_le_parent : forall (pexp : UInt64) (cexp : UInt64),
@@ -124,7 +124,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => pexp) (fun _ => cexp))) (UInt64.toNat pexp))
         (instDecidableUInt64Lt cexp pexp)
-        (fun _ => Nat.le.refl (UInt64.toNat pexp))
+        (fun _ => @Nat.le.refl (UInt64.toNat pexp))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem zero_le_cap (a : UInt64) (cap : UInt64) (hZero : a = 0) :
@@ -137,7 +137,7 @@ clean {
       Nat.le (UInt64.toNat a) (UInt64.toNat b) :=
       Eq.mpr
         (congrArg (fun (x : UInt64) => Nat.le (UInt64.toNat x) (UInt64.toNat b)) hEq)
-        (Nat.le.refl (UInt64.toNat b))
+        (@Nat.le.refl (UInt64.toNat b))
 
     theorem init_establishes_inv (s : DelegationState) (hInit : Init s) :
       DelegationInv s :=

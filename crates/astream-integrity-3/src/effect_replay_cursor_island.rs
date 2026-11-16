@@ -114,7 +114,7 @@ clean {
           Nat.le (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => len) (fun _ => cand))) (UInt64.toNat len))
         (instDecidableUInt64Lt cand len)
-        (fun _ => Nat.le.refl (UInt64.toNat len))
+        (fun _ => @Nat.le.refl (UInt64.toNat len))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem advance_ge_cur : forall (cur : UInt64) (cand : UInt64),
@@ -124,7 +124,7 @@ clean {
           Nat.le (UInt64.toNat cur) (UInt64.toNat (Decidable.casesOn
             (motive := fun _ => UInt64) d (fun _ => cur) (fun _ => cand))))
         (instDecidableUInt64Lt cur cand)
-        (fun _ => Nat.le.refl (UInt64.toNat cur))
+        (fun _ => @Nat.le.refl (UInt64.toNat cur))
         (fun hLt => Nat.le_of_lt hLt)
 
     theorem clamp_advance_ge_cur (cur : UInt64) (cand : UInt64) (len : UInt64)
