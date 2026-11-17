@@ -13,8 +13,14 @@
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 
+/// A paged Merkle map whose shape is a pure function of its rows, addressed by [`rbsr::Range`].
+pub mod map;
 /// Range fingerprints and actor prefixes for immutable inventory reconciliation.
 pub mod rbsr;
+/// Every record's causal past as one shared persistent map, for ancestry among any number of actors.
+pub mod reach;
+/// A set of entries under one 2,048-byte hash that adds and removes an entry in constant time.
+pub mod sethash;
 
 /// SHA-256 content identity, computed and verified by the integrating application.
 pub type Digest = [u8; 32];
@@ -449,7 +455,10 @@ impl VersionVectors {
             self.ordinals.push(ordinal);
             self.sequences.push(*sequence);
         }
-        self.budget = self.budget.saturating_add(self.ordinals.len() - start);
+        // `start` is the length before this row's pushes, so this never saturates.
+        self.budget = self
+            .budget
+            .saturating_add(self.ordinals.len().saturating_sub(start));
         self.rows.insert(header.id, self.dots.len());
         self.dots.push(Dot {
             actor: own,

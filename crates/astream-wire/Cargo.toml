@@ -13,4 +13,6 @@ rust-version.workspace = true
 [dependencies]
 
 [dev-dependencies]
+# SHA-256 for the tests of the `sync` modules whose hash the caller supplies.
+astream-digest.workspace = true
 proptest.workspace = true

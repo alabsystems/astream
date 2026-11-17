@@ -146,7 +146,7 @@ members = [
 # appear in these members — the evidence gate enforces this (see gate.rs).
 
 [workspace.package]
-version = "0.2.2"
+version = "0.2.3"
 edition = "2021"
 license = "Apache-2.0"
 repository = "https://github.com/alabsystems/astream"
@@ -373,24 +373,24 @@ wait $pump || exit 1
 within-secs = 120
 
 [workspace.dependencies]
-astream-wire = { path = "crates/astream-wire", version = "0.2.2" }
-astream-digest = { path = "crates/astream-digest", version = "0.2.2" }
+astream-wire = { path = "crates/astream-wire", version = "0.2.3" }
+astream-digest = { path = "crates/astream-digest", version = "0.2.3" }
 # astream-broker's sibling crates are declared HERE, with the version crates.io
 # requires beside `path`, because `pub bump` moves only the ROOT manifest's
 # intra-workspace requirements. A requirement left in a member manifest does not
 # move, and the bumped workspace stops resolving (measured 2026-09-29: broker's
 # `astream-aead = "^0.1.0"` against a 0.2.0 crate, so `pub bump` undid itself).
-astream-cap = { path = "crates/astream-cap", version = "0.2.2" }
+astream-cap = { path = "crates/astream-cap", version = "0.2.3" }
 # Default features off: a member names the sealed stream (`astream-aead/stream`) when it
 # speaks the sealed wire, so seal/open alone compiles none of it.
-astream-aead = { path = "crates/astream-aead", version = "0.2.2", default-features = false }
+astream-aead = { path = "crates/astream-aead", version = "0.2.3", default-features = false }
 # The OS cordon (F_BARRIERFSYNC, the boot session id, the owner-only file rule): zero
 # dependencies, its only unsafe confined to two modules, cfg(target_vendor = "apple")
 # and cfg(unix).
-astream-sys = { path = "crates/astream-sys", version = "0.2.2" }
-astream-broker = { path = "crates/astream-broker", version = "0.2.2" }
-astream-term = { path = "crates/astream-term", version = "0.2.2" }
-astream-effects = { path = "crates/astream-effects", version = "0.2.2" }
+astream-sys = { path = "crates/astream-sys", version = "0.2.3" }
+astream-broker = { path = "crates/astream-broker", version = "0.2.3" }
+astream-term = { path = "crates/astream-term", version = "0.2.3" }
+astream-effects = { path = "crates/astream-effects", version = "0.2.3" }
 # Third-party (crates.io only — no git, no path-to-private):
 serde = { version = "1.0", features = ["derive"] }
 toml = "0.8"

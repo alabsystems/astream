@@ -374,12 +374,23 @@ fn fetch_reads_what_retention_still_holds_below_its_oldest_and_says_what_it_gave
         assert_eq!(at, seq as u64);
     }
     broker.set_retention(rules).unwrap();
+    // `set_retention` asks the broker's own ticker for a tick at once, and the commit's batch
+    // may ask again, so each step below is that tick's or this one's, whichever runs first:
+    // the test reads what the ticks left (the base and the held store), not one tick's count.
     let now = broker.now_ms();
     let tick = broker.retention_tick_at(now).unwrap();
-    assert_eq!((tick.base, tick.carried), (4, 2), "both mails carried");
+    assert_eq!(
+        (tick.base, broker.stats().log.held_records),
+        (4, 2),
+        "both mails carried"
+    );
     c.commit("/f/F/cur/n1/node/inbox", 2).unwrap();
-    let tick = broker.retention_tick_at(now + 60_000).unwrap();
-    assert_eq!(tick.released, 1, "n1's group read its mail");
+    broker.retention_tick_at(now + 60_000).unwrap();
+    assert_eq!(
+        broker.stats().log.held_records,
+        1,
+        "n1's group read its mail"
+    );
     drop(c);
 
     let fetch = |from: &str| {

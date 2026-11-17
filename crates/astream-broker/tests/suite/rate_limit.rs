@@ -96,7 +96,11 @@ fn rate_limit_spec_parser_roundtrips_and_rejects_invalid_specs() {
 #[test]
 fn per_producer_token_bucket_throttles_burst_reports_retry_after_and_spares_commits_and_retires() {
     let s = Scratch::new("prod");
-    let lim = RateLimit::records(20, 3).unwrap();
+    // One token a second: the burst and the refusal below are four socket round trips, and
+    // a loaded machine can spend 50 ms on those, which at 20/s refilled a token before the
+    // fourth publish. The bucket's arithmetic is pinned without a clock by RateBucket::step's
+    // own tests; this test pins the broker's wiring of it.
+    let lim = RateLimit::records(1, 3).unwrap();
     let opts = OpenOptions::new(Durability::Relaxed).with_rate_limit(lim);
     let b = Broker::open_opts(s.path("b.log"), opts, || Ok(Prepared::Nothing)).unwrap();
     assert_eq!(b.rate_limit(), Some(lim));
@@ -124,8 +128,8 @@ fn per_producer_token_bucket_throttles_burst_reports_retry_after_and_spares_comm
     );
     let retry_ms = refusal.retry_after_ms().expect("retry_after_ms parsed");
     assert!(
-        (1..=60).contains(&retry_ms),
-        "20/s = 50ms per token, got retry_after_ms={retry_ms}"
+        (1..=1_000).contains(&retry_ms),
+        "1/s = 1,000ms per token, got retry_after_ms={retry_ms}"
     );
     assert_eq!(b.stats().rate_limited, 1);
 
@@ -140,8 +144,8 @@ fn per_producer_token_bucket_throttles_burst_reports_retry_after_and_spares_comm
     assert_eq!(c1.last("/m/>", "", 16).unwrap().0.len(), 3);
     assert_eq!(c1.fetch(0, "/m/>", 16).unwrap().0.len(), 6);
 
-    // Wait 65ms (>= 50ms for 1 token at 20/s): Producer 1 refills and publishes seq=4!
-    thread::sleep(Duration::from_millis(65));
+    // Wait out the advertised retry and 15 ms more: Producer 1 refills and publishes seq=4!
+    thread::sleep(Duration::from_millis(retry_ms + 15));
     let (off4, dedup4) = c1.publish(1, 4, "/m/d", b"4").unwrap();
     assert!(!dedup4);
     assert!(off4 >= 7);

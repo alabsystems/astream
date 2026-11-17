@@ -175,8 +175,8 @@ pub use brecord::{
 pub use broker::{
     broker_batch_clamp, broker_wake_attempts_within_cap, identity_principal, rate_clock_advance,
     rate_tokens_clamp, rate_tokens_sufficient, tail_skip_clamp, tail_wake_head_advance,
-    tail_wake_is_caught_up, Broker, BrokerHandle, BrokerStats, FollowerTransport, IDLE_MARK,
-    IDLE_MARK_DEADLINE, KEEPALIVE_DEADLINE, KEEPALIVE_INTERVAL,
+    tail_wake_is_caught_up, Broker, BrokerHandle, BrokerStats, FollowerTransport, RateBucket,
+    RateRefusal, IDLE_MARK, IDLE_MARK_DEADLINE, KEEPALIVE_DEADLINE, KEEPALIVE_INTERVAL,
 };
 #[cfg(feature = "stream")]
 pub use client::connect_stream;

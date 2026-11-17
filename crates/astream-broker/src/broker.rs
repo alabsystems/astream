@@ -167,11 +167,172 @@ contract_fn! {
 /// Hard cap on active per-producer / per-principal token buckets held in memory.
 const MAX_RATE_BUCKETS: usize = 4096;
 
-#[derive(Clone, Copy)]
-struct RateBucket {
-    rec_milli: u64,
-    byte_milli: u64,
-    last_ms: u64,
+/// One bucket of a [`RateLimit`]: a principal's record and byte tokens in thousandths, and
+/// the millisecond they were last refilled at, on whatever monotone clock its keeper reads.
+///
+/// [`RateBucket::step`] is the whole arithmetic the broker judges a publish with, in the
+/// open so another program can judge its own writers by the same rule: nothing here reads a
+/// clock, holds a lock or knows a producer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateBucket {
+    /// Record tokens, in thousandths of a record.
+    pub rec_milli: u64,
+    /// Byte tokens, in thousandths of a byte; 0 under a limit with no byte rate.
+    pub byte_milli: u64,
+    /// The millisecond the tokens were last refilled at.
+    pub last_ms: u64,
+}
+
+/// Why [`RateBucket::step`] refused a record, and the milliseconds after which the same
+/// record would pass were nothing else written meanwhile.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RateRefusal {
+    /// Milliseconds to wait, at least 1.
+    pub retry_ms: u64,
+    /// Which bound refused.
+    pub why: &'static str,
+}
+
+/// Milliseconds until `deficit` thousandths refill at `per_sec`, rounded up, at least 1.
+const fn rate_retry_ms(deficit: u64, per_sec: u64) -> u64 {
+    let ms = match deficit
+        .saturating_add(per_sec.saturating_sub(1))
+        .checked_div(per_sec)
+    {
+        Some(ms) => ms,
+        None => 1,
+    };
+    if ms == 0 {
+        1
+    } else {
+        ms
+    }
+}
+
+/// A record's cost in bytes: its wire bytes, and 1 for an empty one.
+const fn rate_wire_cost(wire_bytes: usize) -> u64 {
+    if wire_bytes == 0 {
+        1
+    } else {
+        wire_bytes as u64
+    }
+}
+
+/// The refusal of a record of `cost` bytes that `limit`'s byte burst can never hold.
+const fn rate_oversize(limit: &RateLimit, cost: u64) -> Option<RateRefusal> {
+    if limit.bytes_per_sec > 0 && cost > limit.burst_bytes {
+        let over = cost.saturating_sub(limit.burst_bytes).saturating_mul(1_000);
+        Some(RateRefusal {
+            retry_ms: rate_retry_ms(over, limit.bytes_per_sec),
+            why: "record bytes exceed burst_bytes",
+        })
+    } else {
+        None
+    }
+}
+
+impl RateBucket {
+    /// A bucket nothing has drawn from: `limit`'s whole burst, as of `now_ms`.
+    #[must_use]
+    pub const fn full(limit: &RateLimit, now_ms: u64) -> Self {
+        Self {
+            rec_milli: limit.burst_records.saturating_mul(1_000),
+            byte_milli: limit.burst_bytes.saturating_mul(1_000),
+            last_ms: now_ms,
+        }
+    }
+
+    /// The tokens this bucket holds at `now_ms` under `limit`: what it held, refilled for
+    /// the time since `last_ms` and clamped to the burst. No byte tokens without a byte rate.
+    const fn refilled(&self, limit: &RateLimit, now_ms: u64) -> (u64, u64) {
+        let elapsed_ms = now_ms.saturating_sub(self.last_ms);
+        let rec = rate_tokens_clamp(
+            self.rec_milli
+                .saturating_add(elapsed_ms.saturating_mul(limit.records_per_sec)),
+            limit.burst_records.saturating_mul(1_000),
+        );
+        let byte = if limit.bytes_per_sec > 0 {
+            rate_tokens_clamp(
+                self.byte_milli
+                    .saturating_add(elapsed_ms.saturating_mul(limit.bytes_per_sec)),
+                limit.burst_bytes.saturating_mul(1_000),
+            )
+        } else {
+            0
+        };
+        (rec, byte)
+    }
+
+    /// Whether this bucket holds `limit`'s whole burst at `now_ms`: forgetting it then
+    /// changes no later verdict, which is how a keeper of many buckets makes room.
+    #[must_use]
+    pub const fn is_full_at(&self, limit: &RateLimit, now_ms: u64) -> bool {
+        let (rec, byte) = self.refilled(limit, now_ms);
+        rec >= limit.burst_records.saturating_mul(1_000)
+            && (limit.bytes_per_sec == 0 || byte >= limit.burst_bytes.saturating_mul(1_000))
+    }
+
+    /// This bucket once the limit changed to `limit` at `now_ms`: its tokens clamped to the
+    /// new burst, and its time moved to `now_ms` with no refill for the time before it.
+    #[must_use]
+    pub const fn under(self, limit: &RateLimit, now_ms: u64) -> Self {
+        Self {
+            rec_milli: rate_tokens_clamp(self.rec_milli, limit.burst_records.saturating_mul(1_000)),
+            byte_milli: rate_tokens_clamp(self.byte_milli, limit.burst_bytes.saturating_mul(1_000)),
+            last_ms: rate_clock_advance(self.last_ms, now_ms),
+        }
+    }
+
+    /// Judge one record of `wire_bytes` at `now_ms`: the bucket afterwards, and whether the
+    /// record passes.
+    ///
+    /// A record larger than the byte burst can never pass and leaves the bucket as it was.
+    /// Otherwise the bucket is refilled to `now_ms`; a record it cannot pay for is refused
+    /// and draws nothing, and one it can pay for draws one record and its bytes. `now_ms`
+    /// earlier than `last_ms` refills nothing and moves no time back, so a clock that steps
+    /// back never pays the same interval twice.
+    pub const fn step(
+        self,
+        limit: &RateLimit,
+        now_ms: u64,
+        wire_bytes: usize,
+    ) -> (Self, Result<(), RateRefusal>) {
+        let cost = rate_wire_cost(wire_bytes);
+        if let Some(refusal) = rate_oversize(limit, cost) {
+            return (self, Err(refusal));
+        }
+        let (rec_milli, byte_milli) = self.refilled(limit, now_ms);
+        let refilled = Self {
+            rec_milli,
+            byte_milli,
+            last_ms: rate_clock_advance(self.last_ms, now_ms),
+        };
+        if !rate_tokens_sufficient(rec_milli, 1_000) {
+            let refusal = RateRefusal {
+                retry_ms: rate_retry_ms(1_000u64.saturating_sub(rec_milli), limit.records_per_sec),
+                why: "record rate exceeded",
+            };
+            return (refilled, Err(refusal));
+        }
+        let cost_milli = cost.saturating_mul(1_000);
+        if limit.bytes_per_sec > 0 && !rate_tokens_sufficient(byte_milli, cost_milli) {
+            let refusal = RateRefusal {
+                retry_ms: rate_retry_ms(cost_milli.saturating_sub(byte_milli), limit.bytes_per_sec),
+                why: "byte rate exceeded",
+            };
+            return (refilled, Err(refusal));
+        }
+        let drawn = Self {
+            rec_milli: rec_milli.saturating_sub(1_000),
+            byte_milli: if limit.bytes_per_sec > 0 {
+                byte_milli.saturating_sub(cost_milli)
+            } else {
+                0
+            },
+            last_ms: refilled.last_ms,
+        };
+        (drawn, Ok(()))
+    }
 }
 
 struct RateLimiterState {
@@ -199,153 +360,70 @@ impl RateLimiterState {
 
     fn set_limit(&mut self, limit: Option<RateLimit>) {
         let now_ms = self.advance_now();
+        self.set_limit_at(now_ms, limit);
+    }
+
+    fn set_limit_at(&mut self, now_ms: u64, limit: Option<RateLimit>) {
         self.limit = limit;
         match limit {
             None => self.buckets.clear(),
             Some(lim) => {
-                let burst_rec = lim.burst_records.saturating_mul(1_000);
-                let burst_byte = lim.burst_bytes.saturating_mul(1_000);
                 for bucket in self.buckets.values_mut() {
-                    bucket.rec_milli = rate_tokens_clamp(bucket.rec_milli, burst_rec);
-                    bucket.byte_milli = rate_tokens_clamp(bucket.byte_milli, burst_byte);
-                    bucket.last_ms = rate_clock_advance(bucket.last_ms, now_ms);
+                    *bucket = bucket.under(&lim, now_ms);
                 }
             }
         }
     }
 
-    fn try_acquire(
+    fn try_acquire(&mut self, producer_id: u64, wire_bytes: usize) -> Result<(), RateRefusal> {
+        let now_ms = self.advance_now();
+        self.try_acquire_at(now_ms, producer_id, wire_bytes)
+    }
+
+    /// [`RateBucket::step`] on `producer_id`'s bucket, a full one where it has none, with
+    /// room made among [`MAX_RATE_BUCKETS`] by forgetting a bucket that is full again.
+    fn try_acquire_at(
         &mut self,
+        now_ms: u64,
         producer_id: u64,
         wire_bytes: usize,
-    ) -> Result<(), (u64, &'static str)> {
-        let now_ms = self.advance_now();
+    ) -> Result<(), RateRefusal> {
         let Some(lim) = self.limit else {
             return Ok(());
         };
-        let burst_rec_milli = lim.burst_records.saturating_mul(1_000);
-        let burst_byte_milli = lim.burst_bytes.saturating_mul(1_000);
-        let wire_b = (wire_bytes.max(1)) as u64;
-        if lim.bytes_per_sec > 0 && wire_b > lim.burst_bytes {
-            let over = wire_b.saturating_sub(lim.burst_bytes).saturating_mul(1_000);
-            let retry_ms = over
-                .saturating_add(lim.bytes_per_sec.saturating_sub(1))
-                .checked_div(lim.bytes_per_sec)
-                .unwrap_or(1)
-                .max(1);
-            return Err((retry_ms, "record bytes exceed burst_bytes"));
+        // Larger than the byte burst: refused before room or a bucket is made for it.
+        if let Some(refusal) = rate_oversize(&lim, rate_wire_cost(wire_bytes)) {
+            return Err(refusal);
         }
-
-        if !self.buckets.contains_key(&producer_id) && self.buckets.len() >= MAX_RATE_BUCKETS {
-            let mut full_pid: Option<u64> = None;
-            for (&pid, b) in &self.buckets {
-                let dt = now_ms.saturating_sub(b.last_ms);
-                let r_now = rate_tokens_clamp(
-                    b.rec_milli
-                        .saturating_add(dt.saturating_mul(lim.records_per_sec)),
-                    burst_rec_milli,
-                );
-                let b_full = if lim.bytes_per_sec > 0 {
-                    let b_now = rate_tokens_clamp(
-                        b.byte_milli
-                            .saturating_add(dt.saturating_mul(lim.bytes_per_sec)),
-                        burst_byte_milli,
-                    );
-                    b_now >= burst_byte_milli
-                } else {
-                    true
-                };
-                if r_now >= burst_rec_milli && b_full {
-                    full_pid = Some(pid);
-                    break;
-                }
-            }
-            match full_pid {
+        let held = self.buckets.get(&producer_id).copied();
+        if held.is_none() && self.buckets.len() >= MAX_RATE_BUCKETS {
+            let full = self
+                .buckets
+                .iter()
+                .find(|(_, bucket)| bucket.is_full_at(&lim, now_ms))
+                .map(|(pid, _)| *pid);
+            match full {
                 Some(evict) => {
                     self.buckets.remove(&evict);
                 }
                 None => {
-                    return Err((50, "active rate buckets at capacity"));
+                    return Err(RateRefusal {
+                        retry_ms: 50,
+                        why: "active rate buckets at capacity",
+                    });
                 }
             }
         }
-
-        let cur = match self.buckets.get(&producer_id) {
-            Some(&b) => b,
-            None => RateBucket {
-                rec_milli: burst_rec_milli,
-                byte_milli: burst_byte_milli,
-                last_ms: now_ms,
-            },
-        };
-        let elapsed_ms = now_ms.saturating_sub(cur.last_ms);
-        let rec_refilled = rate_tokens_clamp(
-            cur.rec_milli
-                .saturating_add(elapsed_ms.saturating_mul(lim.records_per_sec)),
-            burst_rec_milli,
-        );
-        let byte_refilled = if lim.bytes_per_sec > 0 {
-            rate_tokens_clamp(
-                cur.byte_milli
-                    .saturating_add(elapsed_ms.saturating_mul(lim.bytes_per_sec)),
-                burst_byte_milli,
-            )
-        } else {
-            0
-        };
-
-        if !rate_tokens_sufficient(rec_refilled, 1_000) {
-            self.buckets.insert(
-                producer_id,
-                RateBucket {
-                    rec_milli: rec_refilled,
-                    byte_milli: byte_refilled,
-                    last_ms: now_ms,
-                },
-            );
-            let deficit = 1_000u64.saturating_sub(rec_refilled);
-            let retry_ms = deficit
-                .saturating_add(lim.records_per_sec.saturating_sub(1))
-                .checked_div(lim.records_per_sec)
-                .unwrap_or(1)
-                .max(1);
-            return Err((retry_ms, "record rate exceeded"));
-        }
-
-        let cost_byte_milli = wire_b.saturating_mul(1_000);
-        if lim.bytes_per_sec > 0 && !rate_tokens_sufficient(byte_refilled, cost_byte_milli) {
-            self.buckets.insert(
-                producer_id,
-                RateBucket {
-                    rec_milli: rec_refilled,
-                    byte_milli: byte_refilled,
-                    last_ms: now_ms,
-                },
-            );
-            let deficit = cost_byte_milli.saturating_sub(byte_refilled);
-            let retry_ms = deficit
-                .saturating_add(lim.bytes_per_sec.saturating_sub(1))
-                .checked_div(lim.bytes_per_sec)
-                .unwrap_or(1)
-                .max(1);
-            return Err((retry_ms, "byte rate exceeded"));
-        }
-
-        self.buckets.insert(
-            producer_id,
-            RateBucket {
-                rec_milli: rec_refilled.saturating_sub(1_000),
-                byte_milli: if lim.bytes_per_sec > 0 {
-                    byte_refilled.saturating_sub(cost_byte_milli)
-                } else {
-                    0
-                },
-                last_ms: now_ms,
-            },
-        );
-        Ok(())
+        let cur = held.unwrap_or(RateBucket::full(&lim, now_ms));
+        let (next, verdict) = cur.step(&lim, now_ms, wire_bytes);
+        self.buckets.insert(producer_id, next);
+        verdict
     }
 }
+
+#[cfg(test)]
+#[path = "rate_bucket_tests.rs"]
+mod rate_bucket_tests;
 
 contract_fn! {
     /// Verified check that unanswered acceptor wake rounds lie within the 10-attempt cap
@@ -9182,7 +9260,7 @@ fn check_publish_rate_limit(
     };
     match res {
         Ok(()) => Ok(()),
-        Err((retry_ms, why)) => {
+        Err(RateRefusal { retry_ms, why }) => {
             shared.rate_limited.fetch_add(1, Ordering::Relaxed);
             Err(refusal(
                 ERR_RATE_LIMITED,

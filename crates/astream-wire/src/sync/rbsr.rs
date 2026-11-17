@@ -58,7 +58,10 @@ impl Fingerprint {
         let mut sum = self.sum;
         let mut carry = 0u16;
         for (slot, byte) in sum.iter_mut().zip(other.sum).rev() {
-            let next = u16::from(*slot) + u16::from(byte) + carry;
+            // At most 255 + 255 + 1: a u16 never wraps here.
+            let next = u16::from(*slot)
+                .wrapping_add(u16::from(byte))
+                .wrapping_add(carry);
             *slot = next as u8;
             carry = next >> 8;
         }
@@ -74,7 +77,8 @@ impl Fingerprint {
         let mut borrow = 0u16;
         for (slot, byte) in sum.iter_mut().zip(subset.sum).rev() {
             let left = u16::from(*slot);
-            let right = u16::from(byte) + borrow;
+            // At most 255 + 1: a u16 never wraps here.
+            let right = u16::from(byte).wrapping_add(borrow);
             *slot = left.wrapping_sub(right) as u8;
             borrow = u16::from(left < right);
         }
@@ -123,7 +127,8 @@ impl Range {
         } else {
             bytes
         };
-        if prefix[tail..].iter().any(|byte| *byte != 0) {
+        // `tail` is at most 32 (depth at most 64), so this skips exactly `prefix[..tail]`.
+        if prefix.iter().skip(tail).any(|byte| *byte != 0) {
             return Err(Error::Range);
         }
         Ok(Self { prefix, nibbles })
@@ -146,7 +151,8 @@ impl Range {
         while nibble > 0 {
             nibble -= 1;
             let shift = if nibble % 2 == 0 { 4 } else { 0 };
-            let byte = &mut upper[nibble / 2];
+            // `nibble` is below the depth, at most 64, so the byte is always one of the 32.
+            let byte = upper.get_mut(nibble / 2)?;
             if (*byte >> shift) & 15 != 15 {
                 *byte += 1 << shift;
                 return Some(upper);
@@ -162,15 +168,17 @@ impl Range {
         if self.nibbles == 64 {
             return None;
         }
+        // The depth is below 64 here, so the child depth never overflows.
+        let nibbles = self.nibbles.checked_add(1)?;
         Some(std::array::from_fn(|child| {
             let mut prefix = self.prefix;
             let byte = usize::from(self.nibbles / 2);
             let shift = if self.nibbles % 2 == 0 { 4 } else { 0 };
-            prefix[byte] |= (child as u8) << shift;
-            Self {
-                prefix,
-                nibbles: self.nibbles + 1,
+            // The depth is below 64 here, so `byte` is at most 31 and always present.
+            if let Some(byte) = prefix.get_mut(byte) {
+                *byte |= (child as u8) << shift;
             }
+            Self { prefix, nibbles }
         }))
     }
 
@@ -332,7 +340,9 @@ impl Snapshot {
             Bound::Included(hi) => self.ids.partition_point(|id| *id <= hi),
             Bound::Excluded(hi) => self.ids.partition_point(|id| *id < hi),
         };
-        &self.ids[start..end]
+        // Every caller passes a lower bound at or below its upper bound, so `start <= end`
+        // and the empty fallback is never taken.
+        self.ids.get(start..end).unwrap_or_default()
     }
 
     fn prefix_id(&self, actor: &Actor, sequence: u64) -> Option<&Digest> {
@@ -340,11 +350,12 @@ impl Snapshot {
             .prefixes
             .binary_search_by(|(candidate, _)| candidate.cmp(actor))
             .ok()?;
-        let prefix = &self.prefixes[actor].1;
+        // Both positions come from a successful binary search of the same vector.
+        let (_, prefix) = self.prefixes.get(actor)?;
         let position = prefix
             .binary_search_by_key(&sequence, |(sequence, _)| *sequence)
             .ok()?;
-        Some(&prefix[position].1)
+        prefix.get(position).map(|(_, id)| id)
     }
 
     /// Full immutable inventory summary, reused across rounds without rescanning

@@ -672,8 +672,9 @@ impl Quantile {
         if count == 0 {
             return 0;
         }
-        // At most 10^6 · (2^64 - 1) < 2^84, and the rank is at most `count`.
-        let scaled = (self.0 as u128) * (count as u128);
+        // At most 10^6 · (2^64 - 1) < 2^84, and the rank is at most `count`. Any u32 · u64
+        // is below 2^96, so this product never wraps.
+        let scaled = (self.0 as u128).wrapping_mul(count as u128);
         let rank = scaled.div_ceil(1_000_000) as u64;
         if rank == 0 {
             1

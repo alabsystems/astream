@@ -24,6 +24,26 @@
 //! module (e.g. `std::process::Command`) on another thread during that few-µs
 //! window can still inherit a not-yet-CLOEXEC fd; the same window exists in
 //! `std::process` itself on those platforms.
+//!
+//! ## The parent's slave copy is closed before the child runs
+//!
+//! Unread output survives the **last** close of a pty slave only while that close
+//! waits for the master to drain it; then the close flushes the output queue. On
+//! XNU the wait is at most 60 ticks (`ptsclose` sets `t_timeout = 60` around the
+//! line discipline's close, about 0.6 s), after which the queue is discarded. If
+//! this process still held its own slave fd when a fast child (one that writes
+//! and exits at once) finished, the child's close was not the last one, so
+//! nothing waited for it; this process's later `close(slave)` was the last one,
+//! and it could not drain the queue because this process is the only reader and
+//! it was inside `close` — so after 0.6 s the child's whole output was gone.
+//! [`spawn_child`] therefore closes the parent's slave fd under the fork lock
+//! right after `fork`, and the child does nothing until it has: it waits for
+//! EOF on a close-on-exec *release* pipe whose write end the parent closes only
+//! after its slave fd. The child's own exit is then the last close (unless its
+//! descendants still hold the slave), and its output stays readable while that
+//! close waits. **Residual (XNU):** that wait is bounded, so output a child
+//! leaves unread at its exit is still discarded if the master is not read
+//! within about 0.6 s of the last close.
 
 #![cfg(unix)]
 
@@ -174,26 +194,44 @@ fn open_pair() -> io::Result<(c_int, c_int)> {
     Ok((master, slave))
 }
 
+/// XNU's kernel-private `EREDRIVEOPEN` ("redrive open"). Opening `/dev/ptmx`
+/// returns it to user space when another process's concurrent open claimed the
+/// same pty minor first (`ptmx_get_ioctl` finds the slot taken, and `ptcopen`
+/// reports the race instead of redriving the open itself). Nothing was opened,
+/// so the open is simply redriven.
+#[cfg(target_vendor = "apple")]
+const XNU_EREDRIVEOPEN: c_int = -6;
+
 /// Other Unix (macOS, BSDs): `openpty` has no CLOEXEC form, so the flag is added
-/// afterwards — under the fork lock, see the module docs.
+/// afterwards — under the fork lock, see the module docs. On Apple targets a
+/// [`XNU_EREDRIVEOPEN`] (a lost race with another process for a pty minor) is
+/// redriven, like `EINTR`, rather than failing the spawn.
 #[cfg(not(target_os = "linux"))]
 fn open_pair() -> io::Result<(c_int, c_int)> {
     let mut master: c_int = -1;
     let mut slave: c_int = -1;
-    let master_ptr = std::slice::from_mut(&mut master).as_mut_ptr();
-    let slave_ptr = std::slice::from_mut(&mut slave).as_mut_ptr();
-    // SAFETY: master/slave are valid out-params; name/termp/winp are NULL
-    // (allowed). openpty writes the two fds or returns < 0.
-    let rc = sys_ffi!(
-        libc::openpty,
-        master_ptr,
-        slave_ptr,
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-        std::ptr::null_mut(),
-    );
-    if rc < 0 {
-        return Err(last_err());
+    loop {
+        let master_ptr = std::slice::from_mut(&mut master).as_mut_ptr();
+        let slave_ptr = std::slice::from_mut(&mut slave).as_mut_ptr();
+        // SAFETY: master/slave are valid out-params; name/termp/winp are NULL
+        // (allowed). openpty writes the two fds or returns < 0.
+        let rc = sys_ffi!(
+            libc::openpty,
+            master_ptr,
+            slave_ptr,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+        );
+        if rc >= 0 {
+            break;
+        }
+        let err = last_err();
+        #[cfg(target_vendor = "apple")]
+        if err.raw_os_error() == Some(XNU_EREDRIVEOPEN) {
+            continue;
+        }
+        return Err(err);
     }
     let cloexec_res = match set_cloexec(master) {
         Ok(()) => set_cloexec(slave),
@@ -266,6 +304,9 @@ fn cloexec_pipe() -> io::Result<(c_int, c_int)> {
 ///
 /// **Consumes `slave`:** it is closed in the parent on every return path (the
 /// child keeps its own copy as fds 0/1/2), so the caller must not close it again.
+/// On success it is closed **before the child may exec** (see the module docs:
+/// otherwise the parent's close can be the slave's last one, which discards the
+/// output of a child that already exited).
 ///
 /// A setup or exec failure is **reported, not hidden**: a close-on-exec status
 /// pipe carries the first failed child syscall's `errno` back, including if
@@ -291,31 +332,21 @@ pub fn spawn_child(
     prog: &str,
     args: &[&str],
 ) -> io::Result<libc::pid_t> {
-    let r = spawn_child_inner(slave, master, prog, args);
-    // Parent: the slave belongs to the child now (or the spawn failed) — either
-    // way this process must not keep it open, or the master would never see EOF.
-    close(slave);
-    r
-}
-
-fn spawn_child_inner(
-    slave: c_int,
-    master: c_int,
-    prog: &str,
-    args: &[&str],
-) -> io::Result<libc::pid_t> {
     if !prog.contains('/') {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "prog must be a path containing '/' (execv does not search $PATH)",
+        return Err(closing(
+            slave,
+            io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "prog must be a path containing '/' (execv does not search $PATH)",
+            ),
         ));
     }
     let c_prog = match CString::new(prog) {
         Ok(c) => c,
         Err(_) => {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidInput,
-                "NUL byte in argument",
+            return Err(closing(
+                slave,
+                io::Error::new(io::ErrorKind::InvalidInput, "NUL byte in argument"),
             ))
         }
     };
@@ -329,9 +360,9 @@ fn spawn_child_inner(
         match CString::new(*a) {
             Ok(c) => c_args.push(c),
             Err(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "NUL byte in argument",
+                return Err(closing(
+                    slave,
+                    io::Error::new(io::ErrorKind::InvalidInput, "NUL byte in argument"),
                 ))
             }
         }
@@ -353,13 +384,28 @@ fn spawn_child_inner(
     let empty_set_mut = std::slice::from_mut(&mut empty_set).as_mut_ptr();
     // SAFETY: sigemptyset on a live sigset_t.
     if sys_ffi!(libc::sigemptyset, empty_set_mut) < 0 {
-        return Err(last_err());
+        return Err(closing(slave, last_err()));
     }
     let empty_set_ptr = std::slice::from_ref(&empty_set).as_ptr();
 
     let (status_r, pid) = {
         let _g = fork_lock();
-        let (status_r, status_w) = cloexec_pipe()?;
+        let (status_r, status_w) = match cloexec_pipe() {
+            Ok(fds) => fds,
+            Err(e) => return Err(closing(slave, e)),
+        };
+        // The child execs only after EOF here, i.e. after the parent has closed
+        // its slave fd (module docs). Both ends are closed in the parent before
+        // the fork lock is released, so no later fork in this module inherits
+        // the write end and holds the child back.
+        let (release_r, release_w) = match cloexec_pipe() {
+            Ok(fds) => fds,
+            Err(e) => {
+                close(status_r);
+                close(status_w);
+                return Err(closing(slave, e));
+            }
+        };
         // SAFETY: fork() is a direct syscall. In the child we use only
         // async-signal-safe libc calls and pointers into parent-allocated memory
         // (valid via copy-on-write until execv replaces the image); we never
@@ -369,7 +415,9 @@ fn spawn_child_inner(
             let e = last_err();
             close(status_r);
             close(status_w);
-            return Err(e);
+            close(release_r);
+            close(release_w);
+            return Err(closing(slave, e));
         }
         if pid == 0 {
             // A host that closed one of its own stdio fds can allocate the
@@ -378,6 +426,32 @@ fn spawn_child_inner(
             // that failure before any stdio slot is changed.
             let mut report_fd = status_w;
             let raw_errno = 'failed: {
+                // Wait until the parent has closed its slave fd: EOF on the
+                // release pipe, once this process's own copy of the write end
+                // is closed. Nothing is ever written, so a read returns 0 or an
+                // error. Done first, before any dup2 can reuse a stdio slot one
+                // of these fds sits in.
+                if sys_ffi!(libc::close, release_w) < 0 {
+                    break 'failed child_errno();
+                }
+                let mut byte = 0u8;
+                loop {
+                    let n = sys_ffi!(
+                        libc::read,
+                        release_r,
+                        std::slice::from_mut(&mut byte).as_mut_ptr() as *mut _,
+                        1
+                    );
+                    if n >= 0 {
+                        break;
+                    }
+                    if last_err().raw_os_error() != Some(libc::EINTR) {
+                        break 'failed child_errno();
+                    }
+                }
+                if sys_ffi!(libc::close, release_r) < 0 {
+                    break 'failed child_errno();
+                }
                 let moved_status = above_stdio(report_fd);
                 if moved_status < 0 {
                     break 'failed child_errno();
@@ -451,8 +525,17 @@ fn spawn_child_inner(
             return Err(io::Error::from_raw_os_error(raw_errno));
         }
         // Parent: drop the write end so the read below sees EOF once the child
-        // execs (or reports). Outside the lock from here on.
+        // execs (or reports).
         close(status_w);
+        #[cfg(test)]
+        std::thread::sleep(tests::PARENT_STALL_AFTER_FORK.with(std::cell::Cell::get));
+        // Drop this process's slave fd, and only then release the child: the
+        // child's close is now the slave's last unless its descendants hold it
+        // (module docs). Still under the fork lock, so no later fork in this
+        // module inherits the slave either. Outside the lock from here on.
+        close(slave);
+        close(release_r);
+        close(release_w);
         (status_r, pid)
     };
     let outcome = read_exec_status(status_r);
@@ -471,6 +554,13 @@ fn spawn_child_inner(
             Err(io::Error::from_raw_os_error(errno))
         }
     }
+}
+
+/// Close `fd` and pass `e` through: a pre-`fork` failure of [`spawn_child`],
+/// which owns its `slave` on every return path.
+fn closing(fd: c_int, e: io::Error) -> io::Error {
+    close(fd);
+    e
 }
 
 /// Capture a failed child syscall's errno before any other syscall runs. This
@@ -684,6 +774,52 @@ mod tests {
     // including child cleanup and stdin restoration. This is not FORK_LOCK:
     // open_pty and spawn_child acquire that production lock themselves.
     static FD_TEST_LOCK: Mutex<()> = Mutex::new(());
+
+    thread_local! {
+        /// How long [`spawn_child`] on this thread stalls after `fork`, before it
+        /// closes the parent's slave fd: a deterministic stand-in for a host
+        /// that is descheduled there on a loaded machine.
+        pub(super) static PARENT_STALL_AFTER_FORK: std::cell::Cell<std::time::Duration> =
+            const { std::cell::Cell::new(std::time::Duration::ZERO) };
+    }
+
+    /// A child that writes and exits at once keeps its output even when the
+    /// parent stalls between `fork` and closing its own slave fd: the child
+    /// execs only after that close, so the parent's close is never the slave's
+    /// last one (the module docs explain why that loses the output).
+    ///
+    /// NEGATIVE CONTROL: with the child's wait on the release pipe removed from
+    /// [`spawn_child`] (the parent still stalls here, then closes its slave
+    /// fd), the child runs `echo` to completion during the stall, the parent's
+    /// close is the last one and the kernel discards the queued output; this
+    /// test then fails with `the output of a child that exited during the
+    /// parent's stall survives: ""`.
+    #[test]
+    fn a_fast_child_keeps_its_output_when_the_parent_stalls_after_fork() {
+        let _fd_test = FD_TEST_LOCK.lock().expect("another fd fixture failed");
+        let (master, slave) = open_pty(80, 24).expect("open a pty");
+        PARENT_STALL_AFTER_FORK.with(|s| s.set(std::time::Duration::from_millis(300)));
+        let spawned = spawn_child(slave, master, "/bin/echo", &["KNOWN-OUTPUT"]);
+        PARENT_STALL_AFTER_FORK.with(|s| s.set(std::time::Duration::ZERO));
+        let mut output = Vec::new();
+        if let Ok(pid) = spawned {
+            let mut buf = [0u8; 256];
+            while let Ok(n) = read_master(master, &mut buf) {
+                if n == 0 {
+                    break;
+                }
+                output.extend_from_slice(&buf[..n]);
+            }
+            let _ = reap(pid);
+        }
+        close(master);
+        spawned.expect("spawn echo");
+        let output = String::from_utf8_lossy(&output);
+        assert!(
+            output.contains("KNOWN-OUTPUT"),
+            "the output of a child that exited during the parent's stall survives: {output:?}"
+        );
+    }
 
     #[test]
     fn exec_errno_and_winsize_roundtrip() {

@@ -15,7 +15,12 @@ use std::sync::Arc;
 /// fixed total inventory-list cap: callers choose their admitted remote size.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
-    /// Maximum remote inventory count admitted for this exchange.
+    /// In a whole-inventory exchange ([`reconcile`], [`Responder::new`]): the largest
+    /// inventory the peer may state, refused at its root.
+    ///
+    /// In a remainder exchange ([`reconcile_remainder`], [`Responder::remainder`]): the
+    /// most records held at the peer and absent here that this endpoint keeps as the
+    /// difference. No size of either inventory is refused there.
     pub remote_records: u64,
     /// Maximum requests, including setup, pages and any full-width refinement.
     pub messages: u64,
@@ -31,13 +36,29 @@ pub struct Difference {
 }
 
 /// Keep transport failures distinct from protocol refusals.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum ExchangeError<E> {
     /// Malformed, inconsistent or over-budget peer behavior.
     Protocol(Error),
     /// The integrating transport's original error.
     Transport(E),
 }
+
+// The derived comparison, written as one exhaustive match: the derive's catch-all arm after
+// its discriminant test is an `unreachable` the verifier cannot discharge for a generic `E`.
+impl<E: PartialEq> PartialEq for ExchangeError<E> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::Protocol(left), Self::Protocol(right)) => left == right,
+            (Self::Transport(left), Self::Transport(right)) => left == right,
+            (Self::Protocol(_), Self::Transport(_)) | (Self::Transport(_), Self::Protocol(_)) => {
+                false
+            }
+        }
+    }
+}
+
+impl<E: Eq> Eq for ExchangeError<E> {}
 
 impl<E> From<Error> for ExchangeError<E> {
     fn from(error: Error) -> Self {
@@ -79,8 +100,10 @@ fn contribution(mut ids: impl Iterator<Item = Digest>) -> Result<Fingerprint, Er
     })
 }
 
-fn validate_root(value: Fingerprint, limit: u64) -> Result<(), Error> {
-    if value.count > limit {
+/// `limit` is the largest inventory the peer may state; `None` in a remainder exchange,
+/// where no count refuses a root.
+fn validate_root(value: Fingerprint, limit: Option<u64>) -> Result<(), Error> {
+    if limit.is_some_and(|limit| value.count > limit) {
         return Err(Error::Budget);
     }
     if value.count == 0 && value.sum != [0; 32] {
@@ -190,12 +213,18 @@ fn in_range(
     snapshot.range_ids(lower, upper).iter()
 }
 
+/// `room` is the most identities this endpoint may hold from the list: `None` in a
+/// whole-inventory exchange, whose root already bounds them.
 fn list<E>(
     range: Range,
     expected: u64,
+    room: Option<u64>,
     exchange: &mut impl FnMut(Message) -> Result<Message, E>,
     budget: &mut Budget,
 ) -> Result<BTreeSet<Digest>, ExchangeError<E>> {
+    if room.is_some_and(|room| expected > room) {
+        return Err(Error::Budget.into());
+    }
     let mut ids = BTreeSet::new();
     let mut after = None;
     loop {
@@ -231,11 +260,14 @@ fn list<E>(
     }
 }
 
+/// `held` is the most remote-only identities to keep as the difference: `None` in a
+/// whole-inventory exchange, whose root already bounds them.
 fn find<E>(
     view: &Snapshot,
     ours: Fingerprint,
     theirs: Fingerprint,
     full: bool,
+    held: Option<u64>,
     exchange: &mut impl FnMut(Message) -> Result<Message, E>,
     budget: &mut Budget,
 ) -> Result<(BTreeSet<Digest>, BTreeSet<Digest>), ExchangeError<E>> {
@@ -250,21 +282,33 @@ fn find<E>(
             send.extend(in_range(view, range, None).copied());
         } else if local.count == 0 || local.count.max(peer_count) <= 3 || range.children().is_none()
         {
-            let peer = list(range, peer_count, exchange, budget)?;
+            // The peer's list may repeat what this side holds in the range; the rest of
+            // it is difference, and must fit what the difference may still grow by.
+            let room = held.map(|held| {
+                held.saturating_sub(want.len() as u64)
+                    .saturating_add(local.count)
+            });
+            let peer = list(range, peer_count, room, exchange, budget)?;
             send.extend(
                 in_range(view, range, None)
                     .filter(|id| !peer.contains(*id))
                     .copied(),
             );
             want.extend(peer.into_iter().filter(|id| !view.contains(id)));
+            if held.is_some_and(|held| want.len() as u64 > held) {
+                return Err(Error::Budget.into());
+            }
         } else {
             let children = range.children().ok_or(Error::Range)?;
             let mut summaries = [Fingerprint::default(); 16];
             let mut probes = Box::new([Probe::Compact(0, [0; 4]); 16]);
-            for (position, child) in children.into_iter().enumerate() {
-                summaries[position] =
-                    view.range_fingerprint(Some(child.prefix().0), child.upper())?;
-                probes[position] = Probe::new(summaries[position], full);
+            for ((child, summary), probe) in children
+                .into_iter()
+                .zip(summaries.iter_mut())
+                .zip(probes.iter_mut())
+            {
+                *summary = view.range_fingerprint(Some(child.prefix().0), child.upper())?;
+                *probe = Probe::new(*summary, full);
             }
             let answer = call(
                 exchange,
@@ -286,19 +330,18 @@ fn find<E>(
                 return Err(Error::Phase.into());
             }
             let mut total = 0u64;
-            for (position, child) in children.into_iter().enumerate() {
-                let unequal = different & (1 << position) != 0;
-                let count = if unequal {
-                    counts[position]
-                } else {
-                    summaries[position].count
-                };
-                if !unequal && counts[position] != 0 {
+            // `bit` is `1 << position` for each of the sixteen children in turn.
+            let mut bit = 1u16;
+            for ((child, summary), peer) in children.into_iter().zip(summaries).zip(counts) {
+                let unequal = different & bit != 0;
+                bit = bit.wrapping_shl(1);
+                let count = if unequal { peer } else { summary.count };
+                if !unequal && peer != 0 {
                     return Err(Error::Wire.into());
                 }
                 total = total.checked_add(count).ok_or(Error::Count)?;
                 if unequal {
-                    pending.push((child, summaries[position], count));
+                    pending.push((child, summary, count));
                 }
             }
             if total != peer_count {
@@ -328,8 +371,34 @@ fn conserved(
 pub fn reconcile<E>(
     snapshot: Arc<Snapshot>,
     limits: Limits,
+    exchange: impl FnMut(Message) -> Result<Message, E>,
+) -> Result<Difference, ExchangeError<E>> {
+    reconcile_as(snapshot, limits, true, exchange)
+}
+
+/// [`reconcile`] over a remainder: two inventories whose shared history the caller has
+/// already set aside by other means, of any size. There is no frontier stage, so no
+/// message grows with the writers either side has, and no count refuses the peer's root:
+/// [`Limits::remote_records`] bounds only the difference this endpoint holds. The peer
+/// runs a [`Responder::remainder`].
+/// # Errors
+/// As [`reconcile`]; a difference past [`Limits::remote_records`] is refused with
+/// [`Error::Budget`] and no tentative difference.
+pub fn reconcile_remainder<E>(
+    snapshot: Arc<Snapshot>,
+    limits: Limits,
+    exchange: impl FnMut(Message) -> Result<Message, E>,
+) -> Result<Difference, ExchangeError<E>> {
+    reconcile_as(snapshot, limits, false, exchange)
+}
+
+fn reconcile_as<E>(
+    snapshot: Arc<Snapshot>,
+    limits: Limits,
+    whole: bool,
     mut exchange: impl FnMut(Message) -> Result<Message, E>,
 ) -> Result<Difference, ExchangeError<E>> {
+    let held = (!whole).then_some(limits.remote_records);
     let ours = root(&snapshot)?;
     let mut budget = Budget {
         used: 0,
@@ -338,8 +407,8 @@ pub fn reconcile<E>(
     let Message::Root(theirs) = call(&mut exchange, &mut budget, Message::Root(ours))? else {
         return Err(Error::Phase.into());
     };
-    validate_root(theirs, limits.remote_records)?;
-    let (view, ours, theirs) = if ours == theirs {
+    validate_root(theirs, whole.then_some(limits.remote_records))?;
+    let (view, ours, theirs) = if ours == theirs || !whole {
         (Arc::clone(&snapshot), ours, theirs)
     } else {
         let frontiers: Vec<_> = snapshot.frontiers().collect();
@@ -356,14 +425,14 @@ pub fn reconcile<E>(
         let shared = union_prefixes(&proposals, &peer_proposals)?;
         reduced(&snapshot, ours, theirs, &shared)?
     };
-    let (mut send, mut want) = find(&view, ours, theirs, false, &mut exchange, &mut budget)?;
+    let (mut send, mut want) = find(&view, ours, theirs, false, held, &mut exchange, &mut budget)?;
     let mut sent = contribution(send.iter().copied())?;
     let mut wanted = contribution(want.iter().copied())?;
     if !conserved(ours, theirs, sent, wanted)? {
         if call(&mut exchange, &mut budget, Message::Refine)? != Message::Accepted {
             return Err(Error::Phase.into());
         }
-        (send, want) = find(&view, ours, theirs, true, &mut exchange, &mut budget)?;
+        (send, want) = find(&view, ours, theirs, true, held, &mut exchange, &mut budget)?;
         sent = contribution(send.iter().copied())?;
         wanted = contribution(want.iter().copied())?;
         if !conserved(ours, theirs, sent, wanted)? {
@@ -428,6 +497,7 @@ pub struct Responder {
     own_view_root: Fingerprint,
     peer_view_root: Fingerprint,
     limits: Limits,
+    whole: bool,
     budget: Budget,
     phase: Phase,
     frontiers: Vec<Frontier>,
@@ -446,6 +516,19 @@ impl Responder {
     /// # Errors
     /// [`Error::Count`] if a local fingerprint count overflows.
     pub fn new(snapshot: Arc<Snapshot>, limits: Limits) -> Result<Self, Error> {
+        Self::prepared(snapshot, limits, true)
+    }
+
+    /// Prepare the answering side of a [`reconcile_remainder`]: no frontier stage, no
+    /// count refuses the initiator's root, and [`Limits::remote_records`] bounds only the
+    /// difference this endpoint holds.
+    /// # Errors
+    /// [`Error::Count`] if a local fingerprint count overflows.
+    pub fn remainder(snapshot: Arc<Snapshot>, limits: Limits) -> Result<Self, Error> {
+        Self::prepared(snapshot, limits, false)
+    }
+
+    fn prepared(snapshot: Arc<Snapshot>, limits: Limits, whole: bool) -> Result<Self, Error> {
         let original_root = root(&snapshot)?;
         Ok(Self {
             original: Arc::clone(&snapshot),
@@ -455,6 +538,7 @@ impl Responder {
             own_view_root: Fingerprint::default(),
             peer_view_root: Fingerprint::default(),
             limits,
+            whole,
             budget: Budget {
                 used: 0,
                 limit: limits.messages,
@@ -546,9 +630,9 @@ impl Responder {
     fn inner(&mut self, message: Message) -> Result<Message, Error> {
         match (self.phase, message) {
             (Phase::Root, Message::Root(peer)) => {
-                validate_root(peer, self.limits.remote_records)?;
+                validate_root(peer, self.whole.then_some(self.limits.remote_records))?;
                 self.peer_root = peer;
-                if peer == self.original_root {
+                if peer == self.original_root || !self.whole {
                     self.own_view_root = self.original_root;
                     self.peer_view_root = peer;
                     self.phase = Phase::Ranges;
@@ -658,8 +742,13 @@ impl Responder {
         } else {
             (&mut self.send, self.own_view_root.count)
         };
-        if target.len().saturating_add(ids.len()) as u64 > bound {
+        let held = target.len().saturating_add(ids.len()) as u64;
+        if held > bound {
             return Err(Error::Count);
+        }
+        // What only the initiator holds is the difference this endpoint keeps.
+        if initiator_only && !self.whole && held > self.limits.remote_records {
+            return Err(Error::Budget);
         }
         for id in ids {
             let present = if initiator_only {

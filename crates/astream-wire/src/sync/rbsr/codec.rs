@@ -278,10 +278,13 @@ impl Message {
                 }
                 let different = u16::from_le_bytes(input.take()?);
                 let mut counts = [0; 16];
-                for (position, count) in counts.iter_mut().enumerate() {
-                    if different & (1 << position) != 0 {
+                // `bit` is `1 << position` for each of the sixteen positions in turn.
+                let mut bit = 1u16;
+                for count in &mut counts {
+                    if different & bit != 0 {
                         *count = input.count()?;
                     }
+                    bit = bit.wrapping_shl(1);
                 }
                 Self::SplitReply {
                     range,
@@ -352,7 +355,8 @@ fn put_fingerprint(out: &mut Vec<u8>, value: Fingerprint) -> Result<(), Error> {
 fn put_range(out: &mut Vec<u8>, range: Range) {
     let (prefix, depth) = range.prefix();
     out.push(depth);
-    out.extend_from_slice(&prefix[..usize::from(depth).div_ceil(2)]);
+    // A range's depth is at most 64, so this takes at most the 32 prefix bytes.
+    out.extend(prefix.iter().take(usize::from(depth).div_ceil(2)));
 }
 
 fn put_ids(out: &mut Vec<u8>, ids: &[Digest], done: bool, range: Range) -> Result<(), Error> {

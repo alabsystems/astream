@@ -403,3 +403,141 @@ fn unchanged_populated_inventory_uses_constant_wire_without_actor_pages() {
         "unchanged inventory must not exchange actor pages: {traffic:?}"
     );
 }
+
+/// The `index`-th identity of a large inventory: spread over the whole digest space, as
+/// content identities are, and distinct for each index.
+fn spread(index: u64) -> Digest {
+    let mut id = [0; 32];
+    let mut word = index;
+    for chunk in id.as_chunks_mut::<8>().0 {
+        // SplitMix64, a bijection of its state at each step.
+        word = word.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = word;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        *chunk = (z ^ (z >> 31)).to_be_bytes();
+    }
+    id
+}
+
+/// LT-E78. Two replicas that share 5,000,000 records, with 300 more held only here and 400
+/// only at the peer, reconcile as a remainder under a budget of 1,000 remote records: neither root is
+/// refused, no frontier or prefix message crosses, both sides hold the exact difference,
+/// and the traffic follows the 700 records of difference (2,735 requests, 307,468 bytes).
+/// The budget counts the difference held: 399 refuses the initiator, which would hold 400,
+/// and 299 refuses the responder, which would hold 300, each with [`Error::Budget`] and no
+/// difference; 400 and 300 pass. A whole-inventory exchange under the same 1,000
+/// still refuses the peer's root, as the membership log's own bound.
+///
+/// Negative control, run once: with `validate_root` given the limit in a remainder
+/// exchange as in a whole one, the test fails at its first exchange with
+/// `Protocol(Budget)`.
+#[test]
+fn a_peer_whose_root_counts_5000000_records_is_not_refused_and_the_budget_counts_only_the_difference_held(
+) {
+    const SHARED: u64 = 5_000_000;
+    let here: BTreeSet<Digest> = (0..SHARED + 300).map(spread).collect();
+    let there: BTreeSet<Digest> = (0..SHARED)
+        .chain(2 * SHARED..2 * SHARED + 400)
+        .map(spread)
+        .collect();
+    let expected_send: Vec<Digest> = here.difference(&there).copied().collect();
+    let expected_want: Vec<Digest> = there.difference(&here).copied().collect();
+    assert_eq!((here.len(), there.len()), (5_000_300, 5_000_400));
+    assert_eq!((expected_send.len(), expected_want.len()), (300, 400));
+    let here = Arc::new(Snapshot::new(here));
+    let there = Arc::new(Snapshot::new(there));
+    let budget = |remote_records| Limits {
+        remote_records,
+        messages: 100_000,
+    };
+
+    let mut peer = Responder::remainder(Arc::clone(&there), budget(1_000)).unwrap();
+    let mut requests = 0u64;
+    let mut bytes = 0usize;
+    let found = reconcile_remainder(Arc::clone(&here), budget(1_000), |request| {
+        assert!(
+            !matches!(
+                request,
+                Message::Frontiers { .. } | Message::Prefixes { .. }
+            ),
+            "a remainder exchange has no frontier stage"
+        );
+        let wire = request.encode()?;
+        requests += 1;
+        bytes += 4 + wire.len();
+        let reply = peer.answer(Message::decode(&wire)?)?;
+        let wire = reply.encode()?;
+        bytes += 4 + wire.len();
+        Message::decode(&wire)
+    })
+    .expect("a remainder exchange between two replicas of 5,000,000 records");
+    assert_eq!(found.send, expected_send);
+    assert_eq!(found.want, expected_want);
+    let theirs = peer.difference().expect("the peer's difference");
+    assert_eq!(theirs.send, expected_want);
+    assert_eq!(theirs.want, expected_send);
+    // The traffic follows the 700 records of difference, not the 10,000,000 held.
+    // Measured: 2,735 requests and 307,468 bytes both ways.
+    assert!(requests < 6 * 700, "{requests} requests");
+    assert!(bytes < 1 << 19, "{bytes} bytes");
+
+    // The budget's edges, on two replicas that share 50,000 records and differ by the same
+    // 300 and 400.
+    let near: BTreeSet<Digest> = (0..50_300).map(spread).collect();
+    let far: BTreeSet<Digest> = (0..50_000)
+        .chain(2 * SHARED..2 * SHARED + 400)
+        .map(spread)
+        .collect();
+    let near = Arc::new(Snapshot::new(near));
+    let far = Arc::new(Snapshot::new(far));
+
+    // One record fewer than the initiator would hold.
+    let mut peer = Responder::remainder(Arc::clone(&far), budget(1_000)).unwrap();
+    let refused = reconcile_remainder(Arc::clone(&near), budget(399), |request| {
+        peer.answer(request)
+    });
+    assert_eq!(refused, Err(ExchangeError::Protocol(Error::Budget)));
+    assert!(peer.difference().is_none());
+
+    // One record fewer than the responder would hold: its refusal reaches the initiator as
+    // its transport's error, and neither side has a difference.
+    let mut peer = Responder::remainder(Arc::clone(&far), budget(299)).unwrap();
+    let refused = reconcile_remainder(Arc::clone(&near), budget(1_000), |request| {
+        peer.answer(request)
+    });
+    assert_eq!(refused, Err(ExchangeError::Transport(Error::Budget)));
+    assert!(peer.difference().is_none());
+
+    // Exactly what each would hold passes.
+    let mut peer = Responder::remainder(far, budget(300)).unwrap();
+    let found = reconcile_remainder(near, budget(400), |request| peer.answer(request))
+        .expect("a budget of exactly the difference");
+    assert_eq!((found.send.len(), found.want.len()), (300, 400));
+    assert_eq!(
+        peer.difference().map(|d| (d.send.len(), d.want.len())),
+        Some((400, 300))
+    );
+
+    // A whole-inventory exchange keeps its bound on the inventory a peer states: the
+    // initiator refuses the responder's root, and the responder the initiator's.
+    let mut peer = Responder::new(Arc::clone(&there), budget(u64::MAX)).unwrap();
+    let refused = reconcile(Arc::clone(&here), budget(1_000), |request| {
+        peer.answer(request)
+    });
+    assert_eq!(refused, Err(ExchangeError::Protocol(Error::Budget)));
+    let mut peer = Responder::new(there, budget(1_000)).unwrap();
+    assert_eq!(
+        peer.answer(Message::Root(here.fingerprint().unwrap())),
+        Err(Error::Budget)
+    );
+
+    // An initiator with a frontier stage does not complete against a remainder responder.
+    // The responder refuses its first frontier page.
+    let small = Arc::new(Snapshot::new((1..=8).map(digest).collect()));
+    let other = Arc::new(Snapshot::new((5..=12).map(digest).collect()));
+    let mut peer = Responder::remainder(other, budget(1_000)).unwrap();
+    let mixed = reconcile(small, budget(1_000), |request| peer.answer(request));
+    assert_eq!(mixed, Err(ExchangeError::Transport(Error::Phase)));
+    assert!(peer.difference().is_none());
+}
