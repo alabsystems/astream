@@ -120,6 +120,10 @@ mod twins;
 
 #[cfg(test)]
 mod append_tests;
+/// A batch publish is one write and hands back a digest for each record
+/// (`batch_publish_tests.rs`, aterm tracker LT-E30).
+#[cfg(test)]
+mod batch_publish_tests;
 pub mod brecord;
 pub mod broker;
 pub mod client;
@@ -288,11 +292,11 @@ pub use store::RetentionTick;
 pub use store::SealedLog;
 pub use store::{
     at_rest_version_advance, at_rest_version_is_bound, broker_bt_advance, incarnation_base,
-    incarnation_of, is_hidden_record, on_boot_volume, seal_path, store_ack_seq_in_reserved_half,
-    store_head_advance, will_seq, Acks, Boot, BrokerLog, CheckedPublishError, Durability,
-    FlushCounts, InjectedFaults, InterruptedStep, LogStats, OpenCheck, OpenOptions, Prepared,
-    RateLimit, ToldPage, Volume, INC_MAX, MAX_RATE_BUDGET, ORDERED_HORIZON, RETIRE_SUBJECT,
-    WILL_SEQ_LOW,
+    incarnation_of, is_hidden_record, on_boot_volume, record_digest, seal_path,
+    store_ack_seq_in_reserved_half, store_head_advance, will_seq, Acks, BatchPublished,
+    BatchRecord, Boot, BrokerLog, CheckedPublishError, Durability, FlushCounts, InjectedFaults,
+    InterruptedStep, LogStats, OpenCheck, OpenOptions, Prepared, RateLimit, ToldPage, Volume,
+    INC_MAX, MAX_RATE_BUDGET, ORDERED_HORIZON, RETIRE_SUBJECT, WILL_SEQ_LOW,
 };
 
 #[cfg(test)]

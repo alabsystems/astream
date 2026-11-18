@@ -710,6 +710,12 @@ impl Prior {
         }
     }
 
+    /// The identity recorded, when one was: what a checkpoint of the log is bound to
+    /// (`ckpt.rs`).
+    pub(crate) fn identity(&self) -> Option<LogIdentity> {
+        self.recorded().map(|p| p.identity)
+    }
+
     /// Where, among the log's stored frames from `base`, the newest record the last open
     /// saw sits, when it recorded one this log still retains: the frame the identity rules
     /// compare with what it saw ([`Facts::named`]).

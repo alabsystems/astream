@@ -754,6 +754,9 @@ fn seal_keyed(path: &Path, key: &[u8; 32], seam: &Seam) -> io::Result<SealedLog>
     };
     // Closed cleanly at once: every refusal from here on leaves a clean stop.
     src.close_clean()?;
+    // A checkpoint of the plaintext log holds its subjects in the clear, and binds to no
+    // sealed log: it goes before a byte is sealed.
+    super::ckpt::discard(path);
     // A `.seal` beside a log the open read: sealed already all the same. (A keyless open
     // refuses a log a `.seal` sits beside, so this only backs that refusal up.)
     if present(&seal_path(path))? {

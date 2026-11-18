@@ -612,6 +612,8 @@ fn finish(
     reidentify(log, key, intent, anti_rollback)?;
     remove_intent(log)?;
     clear_leftovers(log);
+    // The checkpoint of the log as it was before the switch binds to nothing now.
+    crate::store::discard_checkpoint(log);
     eprintln!(
         "astream-broker: {}: finished the compaction to base {} that a crash interrupted",
         log.display(),

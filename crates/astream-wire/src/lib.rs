@@ -75,7 +75,7 @@ pub use steps::{step_prefix_advance, step_within_bounds};
 pub use subject::{
     filter_depth_contains, segment_depth_advance, Filter, FilterError, Subject, SubjectError,
 };
-pub use sync::{sync_clamp_parent_count, sync_within_capacity};
+pub use sync::{sync_clamp_parent_count, sync_fits_budget};
 pub use wake::{
     wake_charge_clamp, wake_rank_max, wake_within_budget, SessionWakeLedger, WakeBudget, WakeClass,
     WakeDecision, MAX_WAKE_WINDOW_STAMPS,

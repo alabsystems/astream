@@ -130,14 +130,14 @@ fn floored_index_projects_like_the_full_index_above_the_floor() {
     for seed in 1..=40_u64 {
         let mut rng = Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15));
         let headers = history(&mut rng, 90, 60);
-        let mut full = Index::new(1024);
+        let mut full = Index::with_budget(1024 * MAX_HEADER_BYTES);
         for header in &headers {
             full.insert(header.clone()).unwrap();
         }
         // The cut: the past of three records among the first sixty.
         let roots: Vec<Digest> = (0..3).map(|_| headers[rng.below(60) as usize].id).collect();
         let cut = cut_of(&full, &roots);
-        let mut floored = Index::new(1024);
+        let mut floored = Index::with_budget(1024 * MAX_HEADER_BYTES);
         for header in headers.iter().filter(|h| !cut.contains(&h.id)) {
             floored.insert(header.clone()).unwrap();
         }
@@ -209,7 +209,7 @@ fn a_floor_record_is_shaped_and_never_contradicts_what_the_index_holds() {
         parents: vec![id(0)],
     };
     let past = BTreeMap::from([([1; 48], 3)]);
-    let mut index = Index::new(8);
+    let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
     assert_eq!(
         index.insert_floor(FloorRecord {
             header: header.clone(),
@@ -267,7 +267,7 @@ fn a_fork_above_the_floor_withdraws_only_what_is_above_it() {
         previous: Some(id(8)),
         parents: vec![id(8)],
     };
-    let mut index = Index::new(16);
+    let mut index = Index::with_budget(16 * MAX_HEADER_BYTES);
     index
         .insert_floor(FloorRecord {
             header: floor.clone(),
@@ -299,4 +299,171 @@ fn a_fork_above_the_floor_withdraws_only_what_is_above_it() {
     assert!(view.observes(&index, &on_floor.id, &floor.id));
     assert!(view.reaches(&index, &on_floor.id, &actor(2), 7));
     assert!(!view.reaches(&index, &on_floor.id, &actor(2), 9));
+}
+
+/// A digest of `kind` and `n`, apart from `id`'s.
+fn named(kind: u8, n: u64) -> Digest {
+    let mut id = [kind; 32];
+    id[1..9].copy_from_slice(&n.to_be_bytes());
+    id
+}
+
+/// An index's one bound is its stated budget in bytes, and it counts what it holds above its
+/// floor and nothing below it. A floor of 100 records, one a writer, each with a past naming every
+/// writer at sequence 10,000, stands for 1,000,000 records and holds no bytes. Each floor header
+/// offered again as a record is an identical duplicate that takes nothing. Records above the floor
+/// are admitted while their bytes fit, the bytes held being the sum of theirs; the next is refused
+/// as `Capacity` with the budget, the bytes held and the bytes it needs, and a smaller record that
+/// fits is then admitted. The same budget holds 461 records of 120 bytes against 301 of mixed
+/// sizes, so no record count is the bound. A full index still admits a floor record.
+/// NEGATIVE CONTROL: with `insert` not looking a header up among the floor records, the first floor
+/// header offered again is admitted and charged: `re-offered floor record 0: (Ok(true), 152)`.
+#[test]
+fn an_index_above_a_floor_refuses_by_bytes_and_counts_nothing_below_it() {
+    const WRITERS: u64 = 100;
+    const FLOOR_SEQUENCE: u64 = 10_000;
+    let writer = |n: u64| [n as u8; 48];
+    let floor_id = |n: u64| named(1, n);
+    let floor: Vec<FloorRecord> = (0..WRITERS)
+        .map(|n| FloorRecord {
+            header: Header {
+                id: floor_id(n),
+                actor: writer(n),
+                sequence: FLOOR_SEQUENCE,
+                previous: Some(named(2, n)),
+                parents: vec![named(2, n)],
+            },
+            past: (0..WRITERS).map(|w| (writer(w), FLOOR_SEQUENCE)).collect(),
+        })
+        .collect();
+    let below: u64 = floor
+        .iter()
+        .map(|r| r.past.values().sum::<u64>())
+        .max()
+        .unwrap();
+    assert_eq!(below, 1_000_000, "the floor stands for a million records");
+
+    // 300 records of 184 bytes (a predecessor and one other writer's floor record) and room for
+    // 150 more: one more of those does not fit, one of 120 bytes does.
+    let budget = 300 * (HEADER_BYTES + 2 * PARENT_BYTES) + 150;
+    let mut index = Index::with_budget(budget);
+    for record in &floor {
+        assert_eq!(index.insert_floor(record.clone()), Ok(true));
+    }
+    assert_eq!(index.held(), 0, "the floor holds no bytes");
+    for (n, record) in floor.iter().enumerate() {
+        let header = record.header.clone();
+        assert_eq!(index.check_insert(&header), Ok(false), "floor record {n}");
+        assert_eq!(
+            (index.insert(header), index.held()),
+            (Ok(false), 0),
+            "re-offered floor record {n}"
+        );
+    }
+    let mut changed = floor[0].header.clone();
+    changed.parents.push(floor_id(1));
+    changed.parents.sort_unstable();
+    assert_eq!(index.insert(changed), Err(Refusal::DigestCollision));
+    assert_eq!(index.inventory().count(), 0);
+
+    let mut above = Vec::new();
+    let mut tips: Vec<Digest> = (0..WRITERS).map(floor_id).collect();
+    let refused = loop {
+        let i = above.len() as u64;
+        let n = i % WRITERS;
+        let previous = tips[n as usize];
+        let mut parents = vec![previous, floor_id((n + 1) % WRITERS)];
+        parents.sort_unstable();
+        let header = Header {
+            id: named(3, i),
+            actor: writer(n),
+            sequence: FLOOR_SEQUENCE + 1 + i / WRITERS,
+            previous: Some(previous),
+            parents,
+        };
+        let held = index.held();
+        match index.insert(header.clone()) {
+            Ok(true) => {
+                assert_eq!(index.held(), held + header.bytes());
+                tips[n as usize] = header.id;
+                above.push(header);
+            }
+            refusal => break (header, refusal),
+        }
+    };
+    let (header, refusal) = refused;
+    assert_eq!(above.len(), 300);
+    let held = 300 * header.bytes();
+    let full = Refusal::Capacity {
+        budget,
+        held,
+        needed: HEADER_BYTES + 2 * PARENT_BYTES,
+    };
+    assert_eq!(refusal, Err(full));
+    assert_eq!(index.check_insert(&header), Err(full));
+    assert_eq!(index.check_insert_many([&header]), Err(full));
+    assert_eq!(index.held(), held);
+
+    let small = Header {
+        id: named(4, 0),
+        actor: writer(WRITERS),
+        sequence: 1,
+        previous: None,
+        parents: Vec::new(),
+    };
+    assert_eq!(small.bytes(), HEADER_BYTES);
+    assert_eq!(
+        index.insert(small.clone()),
+        Ok(true),
+        "120 bytes fit in 150"
+    );
+    assert_eq!(index.held(), held + HEADER_BYTES);
+    let retained: u64 = index
+        .inventory()
+        .map(|id| index.get(id).unwrap().bytes())
+        .sum();
+    assert_eq!(retained, index.held(), "held is the bytes retained");
+    assert_eq!(
+        index.insert(Header {
+            id: named(4, 1),
+            ..small
+        }),
+        Err(Refusal::Capacity {
+            budget,
+            held: held + HEADER_BYTES,
+            needed: HEADER_BYTES,
+        })
+    );
+
+    // The same budget, records of 120 bytes: the count follows the bytes.
+    let mut parentless = Index::with_budget(budget);
+    let mut count = 0_u64;
+    while parentless
+        .insert(Header {
+            id: named(5, count),
+            actor: [9; 48],
+            sequence: 1,
+            previous: None,
+            parents: Vec::new(),
+        })
+        .is_ok()
+    {
+        count += 1;
+    }
+    assert_eq!(count, budget / HEADER_BYTES);
+    assert_eq!(count, 461);
+
+    // Full, the index still admits a floor record: it takes no bytes.
+    let wider = FloorRecord {
+        header: Header {
+            id: named(6, 0),
+            actor: writer(WRITERS + 1),
+            sequence: 7,
+            previous: Some(named(6, 1)),
+            parents: vec![named(6, 1)],
+        },
+        past: (0..=WRITERS + 1).map(|w| (writer(w), 7)).collect(),
+    };
+    assert_eq!(index.insert_floor(wider), Ok(true));
+    assert_eq!(index.held(), held + HEADER_BYTES);
 }

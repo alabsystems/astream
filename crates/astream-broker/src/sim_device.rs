@@ -281,6 +281,14 @@ struct State {
     /// the cursor a Windows read leaves.
     #[cfg(test)]
     cursor: usize,
+    /// How many writes the log file has taken ([`Sim::log_writes`]): one per call of
+    /// [`Sim::write_at`] or [`Sim::write_at_cursor`], whatever its length.
+    #[cfg(test)]
+    log_writes: u64,
+    /// How many full flushes and how many barriers the log file has taken
+    /// ([`Sim::log_flushes`]), a barrier the plain-fsync device ignores included.
+    #[cfg(test)]
+    log_flushes: (u64, u64),
 }
 
 impl State {
@@ -298,6 +306,28 @@ impl State {
 
     #[cfg(not(test))]
     const fn read_to(&mut self, _at: usize) {}
+
+    /// The log file took one write ([`State::log_writes`]).
+    #[cfg(test)]
+    const fn wrote(&mut self) {
+        self.log_writes = self.log_writes.saturating_add(1);
+    }
+
+    #[cfg(not(test))]
+    const fn wrote(&mut self) {}
+
+    /// The log file took a full flush (`full`) or a barrier ([`State::log_flushes`]).
+    #[cfg(test)]
+    const fn flushed(&mut self, full: bool) {
+        if full {
+            self.log_flushes.0 = self.log_flushes.0.saturating_add(1);
+        } else {
+            self.log_flushes.1 = self.log_flushes.1.saturating_add(1);
+        }
+    }
+
+    #[cfg(not(test))]
+    const fn flushed(&mut self, _full: bool) {}
 }
 
 /// The simulated device behind the storage seam: cheap to clone (one shared state).
@@ -323,6 +353,10 @@ impl Sim {
                 trace: None,
                 #[cfg(test)]
                 cursor: 0,
+                #[cfg(test)]
+                log_writes: 0,
+                #[cfg(test)]
+                log_flushes: (0, 0),
             })),
             path: Arc::new(PathBuf::from("sim.log")),
         }
@@ -389,7 +423,23 @@ impl Sim {
         let mut s = self.lock();
         let from = usize::try_from(at).unwrap_or(usize::MAX);
         s.dev.put(from, bytes);
+        s.wrote();
         s.record();
+    }
+
+    /// How many writes the log file has taken since the device was made: what a test
+    /// that counts a path's device writes reads before and after it.
+    #[cfg(test)]
+    pub(crate) fn log_writes(&self) -> u64 {
+        self.lock().log_writes
+    }
+
+    /// How many full flushes and how many barriers the log file has taken since the device
+    /// was made, an open's own among them: the device's count, beside the log's
+    /// ([`FlushCounts`](crate::FlushCounts)).
+    #[cfg(test)]
+    pub(crate) fn log_flushes(&self) -> (u64, u64) {
+        self.lock().log_flushes
     }
 
     /// F24's NEGATIVE CONTROL: write `bytes` at the cursor ([`State::cursor`]) and move it
@@ -400,6 +450,7 @@ impl Sim {
         let from = s.cursor;
         s.dev.put(from, bytes);
         s.cursor = from.saturating_add(bytes.len());
+        s.wrote();
         s.record();
     }
 
@@ -429,6 +480,7 @@ impl Sim {
         s.dev.epochs.clear();
         s.dev.flushed = s.dev.logical.len();
         s.dev.appended(None);
+        s.flushed(true);
         s.record();
     }
 
@@ -444,6 +496,7 @@ impl Sim {
             s.dev.dirty.clear();
         }
         s.dev.appended(None);
+        s.flushed(false);
         s.record();
     }
 

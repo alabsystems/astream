@@ -1551,7 +1551,6 @@ impl DedupIndex {
 
     /// Call `f` with every held `(producer_id, producer_seq, offset)` while it answers
     /// true; whether it always did.
-    #[cfg(test)]
     fn each(&self, mut f: impl FnMut(u64, u64, u64) -> bool) -> bool {
         for (&pid, p) in &self.packed {
             for c in p.chunks() {
@@ -1594,6 +1593,19 @@ impl DedupIndex {
                 out.push((pid, seq, off));
             }
         }
+        out
+    }
+
+    /// Every held `(producer_id, producer_seq, offset)`, sorted: a producer's keys together
+    /// and in sequence order, as a checkpoint writes them (`ckpt.rs`, which packs each run of
+    /// consecutive sequences) and as [`insert`](Self::insert) takes them back.
+    pub(crate) fn sorted_keys(&self) -> Vec<(u64, u64, u64)> {
+        let mut out = Vec::with_capacity(self.len);
+        self.each(|pid, seq, o| {
+            out.push((pid, seq, o));
+            true
+        });
+        out.sort_unstable();
         out
     }
 

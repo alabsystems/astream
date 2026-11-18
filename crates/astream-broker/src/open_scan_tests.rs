@@ -28,14 +28,14 @@ use crate::storage::Dir;
 use crate::test_scratch::Scratch;
 
 /// xorshift64*: the tests' deterministic PRNG.
-struct Rng(u64);
+pub(super) struct Rng(u64);
 
 impl Rng {
-    fn new(seed: u64) -> Rng {
+    pub(super) fn new(seed: u64) -> Rng {
         Rng(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
     }
 
-    fn below(&mut self, n: u64) -> u64 {
+    pub(super) fn below(&mut self, n: u64) -> u64 {
         let mut x = self.0;
         x ^= x >> 12;
         x ^= x << 25;
@@ -44,17 +44,17 @@ impl Rng {
         x.wrapping_mul(0x2545_F491_4F6C_DD1D) % n.max(1)
     }
 
-    fn pick<T: Copy>(&mut self, of: &[T]) -> T {
+    pub(super) fn pick<T: Copy>(&mut self, of: &[T]) -> T {
         of[self.below(of.len() as u64) as usize]
     }
 }
 
-const KEY: [u8; 32] = [0x5a; 32];
+pub(super) const KEY: [u8; 32] = [0x5a; 32];
 
 /// The windows the streaming side reads through, from one byte to the shipped size.
-const WINDOWS: [usize; 6] = [1, 7, 61, 300, 4_096, open_scan::WINDOW];
+pub(super) const WINDOWS: [usize; 6] = [1, 7, 61, 300, 4_096, open_scan::WINDOW];
 /// The bytes of an unended unit's records it holds before it folds them anyway.
-const PENDINGS: [usize; 4] = [0, 300, 4_096, OPEN_PENDING];
+pub(super) const PENDINGS: [usize; 4] = [0, 300, 4_096, OPEN_PENDING];
 /// The residency budgets: the newest record alone, a few records, 16 MiB, all.
 const BUDGETS: [usize; 4] = [0, 512, 16 << 20, crate::tier::Tier::RESIDENT_ALL];
 
@@ -296,14 +296,14 @@ fn a_scan_that_drops_the_record_straddling_its_window_is_caught() {
 
 /// How a seed's log is held.
 #[derive(Clone, Copy, Debug)]
-struct Shape {
-    sealed: bool,
+pub(super) struct Shape {
+    pub(super) sealed: bool,
     /// Strict, sealed, and opened with the anti-rollback watermark verified.
-    verified: bool,
-    budget: usize,
+    pub(super) verified: bool,
+    pub(super) budget: usize,
 }
 
-fn options(shape: Shape, read: ReadOpen) -> OpenOptions {
+pub(super) fn options(shape: Shape, read: ReadOpen) -> OpenOptions {
     let mut opts = OpenOptions::new(if shape.verified {
         Durability::Strict
     } else {
@@ -317,7 +317,16 @@ fn options(shape: Shape, read: ReadOpen) -> OpenOptions {
 /// Open the log at `path` as `shape` holds it, reading it as `read` says (`repair`: the
 /// explicit repair's open).
 fn open(path: &Path, shape: Shape, read: ReadOpen, repair: bool) -> io::Result<BrokerLog> {
-    let opts = options(shape, read);
+    open_as(path, shape, &options(shape, read), repair)
+}
+
+/// [`open`] with `opts`, which `shape` made ([`options`]) and a test then changed.
+pub(super) fn open_as(
+    path: &Path,
+    shape: Shape,
+    opts: &OpenOptions,
+    repair: bool,
+) -> io::Result<BrokerLog> {
     let key = if shape.sealed { Some(KEY) } else { None };
     #[cfg(feature = "anti-rollback")]
     let mode = match (shape.verified, hw_exists(path)) {
@@ -329,7 +338,7 @@ fn open(path: &Path, shape: Shape, read: ReadOpen, repair: bool) -> io::Result<B
     let mode = AntiRollbackMode::Off;
     BrokerLog::open_core(
         Storage::Os(path),
-        &opts,
+        opts,
         repair,
         key,
         mode,
@@ -346,7 +355,7 @@ fn hw_exists(path: &Path) -> bool {
 }
 
 /// Copy every file of the log at `from` (the log and its sidecars, `<log>*`) into `dir`.
-fn copy_log(from: &Path, dir: &Path) -> std::path::PathBuf {
+pub(super) fn copy_log(from: &Path, dir: &Path) -> std::path::PathBuf {
     std::fs::create_dir_all(dir).unwrap();
     let name = from.file_name().unwrap().to_string_lossy().to_string();
     for entry in std::fs::read_dir(from.parent().unwrap()).unwrap() {
@@ -368,7 +377,20 @@ fn sorted<K: Ord + std::fmt::Debug, V: std::fmt::Debug>(m: &HashMap<K, V>) -> St
 /// Everything the open log at `path` answers, rendered; `prior_id`: the identity its `.id`
 /// named before the open, if any (a fresh id is rendered as `fresh`, since each copy mints
 /// its own).
-fn answers(log: &BrokerLog, path: &Path, prior_id: Option<[u8; 16]>) -> Vec<String> {
+pub(super) fn answers(log: &BrokerLog, path: &Path, prior_id: Option<[u8; 16]>) -> Vec<String> {
+    answers_over(log, path, prior_id, 1)
+}
+
+/// [`answers`] of a log too large to render record by record: every `every`th record's lines
+/// and the newest 2,048's, with a digest of every record's summary, place and time; the read
+/// from the base is of the newest 2,048, and a line over 64 KiB (the exactly-once keys, the
+/// plan) is its digest.
+pub(super) fn answers_over(
+    log: &BrokerLog,
+    path: &Path,
+    prior_id: Option<[u8; 16]>,
+    every: usize,
+) -> Vec<String> {
     let mut out = Vec::new();
     let id = log.identity.identity.id;
     let derivable = prior_id.is_none() && log.next.0 > log.base.0;
@@ -409,17 +431,29 @@ fn answers(log: &BrokerLog, path: &Path, prior_id: Option<[u8; 16]>) -> Vec<Stri
         tier.resident_bytes(),
         tier.live_subjects()
     ));
+    let rendered =
+        |i: usize| i.is_multiple_of(every.max(1)) || i.saturating_add(2_048) >= tier.len();
+    let mut digest = 0xcbf2_9ce4_8422_2325u64;
     for i in 0..tier.len() {
-        out.push(format!(
+        let line = format!(
             "summary {i}: {:?} at {:?} bt {:?} hot {}",
             tier.summary(i),
             tier.at(i),
             tier.bt(i),
             tier.hot(i).map(|r| r.seq.0).is_some()
-        ));
+        );
+        for b in line.bytes() {
+            digest = (digest ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        if rendered(i) {
+            out.push(line);
+        }
+    }
+    if every > 1 {
+        out.push(format!("summaries digest {digest:016x}"));
     }
     log.reset_cold_reads();
-    for i in 0..tier.len() {
+    for i in (0..tier.len()).filter(|&i| rendered(i)) {
         out.push(format!("record {i}: {:?}", log.record_arc(i)));
     }
     out.push(format!("cold reads {}", log.cold_reads()));
@@ -465,7 +499,22 @@ fn answers(log: &BrokerLog, path: &Path, prior_id: Option<[u8; 16]>) -> Vec<Stri
     out.push(format!("stats {:?}", log.stats()));
     #[cfg(feature = "retention")]
     out.push(plan(log));
-    out.push(format!("read from base {:?}", log.read_from(log.base)));
+    if every > 1 {
+        let from = Offset(log.next.0.saturating_sub(2_048).max(log.base.0));
+        out.push(format!("read from {from:?} {:?}", log.read_from(from)));
+        for line in &mut out {
+            if line.len() > 65_536 {
+                let mut digest = 0xcbf2_9ce4_8422_2325u64;
+                for b in line.bytes() {
+                    digest = (digest ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+                }
+                let name: String = line.chars().take(24).collect();
+                *line = format!("{name}... digest {digest:016x} of {} bytes", line.len());
+            }
+        }
+    } else {
+        out.push(format!("read from base {:?}", log.read_from(log.base)));
+    }
     out
 }
 
@@ -525,7 +574,7 @@ fn opened(path: &Path, shape: Shape, read: ReadOpen, repair: bool) -> Vec<String
 }
 
 /// The first line two answers differ in.
-fn first_difference(a: &[String], b: &[String]) -> Option<String> {
+pub(super) fn first_difference(a: &[String], b: &[String]) -> Option<String> {
     for (i, (x, y)) in a.iter().zip(b).enumerate() {
         if x != y {
             return Some(format!("line {i}:\n  reference {x}\n  streamed  {y}"));
@@ -540,6 +589,11 @@ fn first_difference(a: &[String], b: &[String]) -> Option<String> {
 /// Tear the log at `path` (which a log just wrote and was dropped from) at random, or leave
 /// it: what was done, and the bytes it held before.
 fn tear(rng: &mut Rng, path: &Path) -> (&'static str, Vec<u8>) {
+    tear_from(rng, path, 0)
+}
+
+/// [`tear`], its flipped byte at `flips_from` or after (none when the log ends there).
+pub(super) fn tear_from(rng: &mut Rng, path: &Path, flips_from: usize) -> (&'static str, Vec<u8>) {
     let before = std::fs::read(path).unwrap();
     let mut bytes = before.clone();
     let what = match rng.below(9) {
@@ -561,8 +615,9 @@ fn tear(rng: &mut Rng, path: &Path) -> (&'static str, Vec<u8>) {
             bytes.extend((0..1 + rng.below(30)).map(|_| rng.below(256) as u8));
             "garbage appended"
         }
-        4 if bytes.len() > 16 => {
-            let at = bytes.len() - 1 - rng.below(bytes.len().min(400) as u64) as usize;
+        4 if bytes.len() > 16 && bytes.len() > flips_from => {
+            let span = (bytes.len() - flips_from).min(400);
+            let at = bytes.len() - 1 - rng.below(span as u64) as usize;
             bytes[at] ^= 1 << rng.below(8);
             "a byte flipped"
         }
@@ -833,7 +888,7 @@ fn reopened_moving(path: &Path, shape: Shape) -> (BrokerLog, Vec<usize>) {
 }
 
 /// Publish `n` more records of one size to `log`, in batches.
-fn publish_uniform(log: &mut BrokerLog, n: u64) {
+pub(super) fn publish_uniform(log: &mut BrokerLog, n: u64) {
     let from = log.head().0;
     for seq in from..from + n {
         log.stage_publish(1, seq + 1, "/f/open/even".to_string(), vec![5u8; 64])

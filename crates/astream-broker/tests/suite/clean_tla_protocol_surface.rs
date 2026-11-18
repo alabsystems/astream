@@ -313,7 +313,7 @@ fn clean_origin_wire_frame_steps_hash_offset_partition_subject_kernels_enforce_t
         fnv1a_64_state_matches, fnv1a_64_update, fnv1a_64_xor, frame_clamp_payload_len,
         offset_advance_monotone, offset_precedes_or_eq, partition_in_bounds,
         partition_modulus_clamp, payload_within_cap, segment_depth_advance, step_prefix_advance,
-        step_within_bounds, sync_clamp_parent_count, sync_within_capacity, CRC32_IEEE_POLY,
+        step_within_bounds, sync_clamp_parent_count, sync_fits_budget, CRC32_IEEE_POLY,
         FNV1A_64_INIT, FNV1A_64_PRIME, MAX_PAYLOAD_LEN,
     };
 
@@ -390,8 +390,10 @@ fn clean_origin_wire_frame_steps_hash_offset_partition_subject_kernels_enforce_t
 
     assert_eq!(sync_clamp_parent_count(3, 8), 3);
     assert_eq!(sync_clamp_parent_count(12, 8), 8);
-    assert!(sync_within_capacity(7, 8));
-    assert!(!sync_within_capacity(8, 8));
+    assert!(sync_fits_budget(7, 1, 8));
+    assert!(!sync_fits_budget(8, 1, 8));
+    assert!(sync_fits_budget(0, u64::MAX, u64::MAX));
+    assert!(!sync_fits_budget(u64::MAX, 1, u64::MAX));
 
     assert_eq!(astream_broker::at_rest_version_advance(2, 1), 2);
     assert_eq!(astream_broker::at_rest_version_advance(1, 2), 2);

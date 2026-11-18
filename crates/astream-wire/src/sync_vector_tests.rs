@@ -106,7 +106,7 @@ proptest::proptest! {
         ),
     ) {
         let headers = history(&rows);
-        let mut index = Index::new(headers.len());
+        let mut index = Index::with_budget(headers.len() as u64 * MAX_HEADER_BYTES);
         for at in order.iter().filter(|at| **at < headers.len()) {
             // A row the generator marks unretained leaves a missing intermediate.
             if rows[*at].3 != 0 {
@@ -121,7 +121,7 @@ proptest::proptest! {
             .collect();
         let mut ids: Vec<Digest> = headers.iter().map(|h| h.id).collect();
         ids.push(missing(0));
-        let empty = Index::new(0);
+        let empty = Index::with_budget(0);
         for policy in [BTreeSet::new(), excluded] {
             let view = index.project_excluding(&policy);
             proptest::prop_assert_eq!(observation_breach(&view, &index, &ids), None);
@@ -169,7 +169,7 @@ fn crossing() -> (Index, Vec<Digest>) {
         header(d(9), 4, 2, Some(d(30)), &[d(30)]),
         header(d(10), 5, 1, None, &[d(5), d(9)]),
     ];
-    let mut index = Index::new(16);
+    let mut index = Index::with_budget(16 * MAX_HEADER_BYTES);
     for h in headers {
         index.insert(h).unwrap();
     }
@@ -185,7 +185,7 @@ fn projection_observes_answers_discharged_pairs_from_vectors() {
     let d = |n: u8| [n; 32];
     assert_eq!(view.ordered, [1, 2, 3, 4, 5].map(d));
     assert_eq!(observation_breach(&view, &index, &ids), None);
-    let empty = Index::new(0);
+    let empty = Index::with_budget(0);
     assert!(
         view.observes(&empty, &d(4), &d(1)),
         "4 reaches 1 through 3 and 2; with no index to walk, the vectors answer"
@@ -237,7 +237,7 @@ fn the_vector_law_catches_a_vector_that_forgets_a_transitive_ancestor() {
 #[test]
 fn ancestors_end_on_a_cycle_and_skip_unretained_parents() {
     let d = |n: u8| [n; 32];
-    let mut index = Index::new(4);
+    let mut index = Index::with_budget(4 * MAX_HEADER_BYTES);
     index
         .insert(header(d(1), 1, 1, None, &[d(2), d(9)]))
         .unwrap();
@@ -252,7 +252,9 @@ fn ancestors_end_on_a_cycle_and_skip_unretained_parents() {
 #[test]
 fn the_frontier_ignores_refusals_and_duplicates() {
     let d = |n: u8| [n; 32];
-    let mut index = Index::new(2);
+    // Room for exactly the two records it holds: one with a predecessor, one without.
+    let budget = 2 * HEADER_BYTES + PARENT_BYTES;
+    let mut index = Index::with_budget(budget);
     index.insert(header(d(2), 1, 2, Some(d(1)), &[])).unwrap();
     assert_eq!(index.insert(header(d(2), 1, 2, Some(d(1)), &[])), Ok(false));
     assert_eq!(
@@ -266,7 +268,11 @@ fn the_frontier_ignores_refusals_and_duplicates() {
     index.insert(header(d(1), 1, 1, None, &[])).unwrap();
     assert_eq!(
         index.insert(header(d(4), 1, 3, Some(d(2)), &[])),
-        Err(Refusal::Capacity)
+        Err(Refusal::Capacity {
+            budget,
+            held: budget,
+            needed: HEADER_BYTES + PARENT_BYTES,
+        })
     );
     assert_eq!(index.frontier(), &BTreeMap::from([([1; 48], 2)]));
 }
@@ -276,7 +282,7 @@ fn vectors_past_their_budget_leave_the_rest_to_the_walk() {
     // 200 writers in one chain, each naming the one before: the row of the n-th holds n
     // entries, so the rows pass 64 entries per record near the 160th, and every record
     // after that walks.
-    let mut index = Index::new(200);
+    let mut index = Index::with_budget(200 * MAX_HEADER_BYTES);
     for row in 0..200usize {
         let parents: Vec<Digest> = row.checked_sub(1).map(id).into_iter().collect();
         index
@@ -293,8 +299,8 @@ fn vectors_past_their_budget_leave_the_rest_to_the_walk() {
     assert_eq!(observation_breach(&view, &index, &ids), None);
     assert!(view.observes(&index, &id(199), &id(0)));
     assert!(
-        !view.observes(&Index::new(0), &id(199), &id(0)),
+        !view.observes(&Index::with_budget(0), &id(199), &id(0)),
         "199 has no row"
     );
-    assert!(view.observes(&Index::new(0), &id(100), &id(0)));
+    assert!(view.observes(&Index::with_budget(0), &id(100), &id(0)));
 }

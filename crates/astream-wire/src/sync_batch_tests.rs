@@ -24,7 +24,7 @@ fn batch_preflight_matches_sequential_insertion_without_retaining_proposals() {
     let choices = [header(1), header(2), collision, header(3), malformed];
     for capacity in 0..=4 {
         for retained in 0..=capacity.min(2) {
-            let mut index = Index::new(capacity);
+            let mut index = Index::with_budget(capacity as u64 * HEADER_BYTES);
             for id in 1..=retained {
                 index.insert(header(id as u8)).unwrap();
             }
@@ -54,24 +54,24 @@ fn batch_preflight_matches_sequential_insertion_without_retaining_proposals() {
 
 #[test]
 fn batch_preflight_counts_only_distinct_additions_and_rechecks_capacity() {
-    let mut index = Index::new(2);
+    let budget = 2 * HEADER_BYTES;
+    let full = Err(Refusal::Capacity {
+        budget,
+        held: budget,
+        needed: HEADER_BYTES,
+    });
+    let mut index = Index::with_budget(budget);
     let first = header(1);
     let second = header(2);
     let third = header(3);
     index.insert(first.clone()).unwrap();
     for _ in 0..2 {
         assert_eq!(index.check_insert_many([&first, &second, &second]), Ok(1));
-        assert_eq!(
-            index.check_insert_many([&second, &third]),
-            Err(Refusal::Capacity)
-        );
+        assert_eq!(index.check_insert_many([&second, &third]), full);
     }
     assert_eq!(index.inventory().count(), 1);
     index.insert(third).unwrap();
-    assert_eq!(
-        index.check_insert_many([&first, &second]),
-        Err(Refusal::Capacity)
-    );
+    assert_eq!(index.check_insert_many([&first, &second]), full);
     assert_eq!(index.check_insert_many([&first, &first]), Ok(0));
 }
 
@@ -88,7 +88,7 @@ fn incremental_proposals_match_sequential_insertion_after_every_refusal() {
     let mut seen = Vec::new();
     for capacity in 0..=4 {
         for retained in 0..=capacity.min(2) {
-            let mut index = Index::new(capacity);
+            let mut index = Index::with_budget(capacity as u64 * HEADER_BYTES);
             for id in 1..=retained {
                 index.insert(header(id as u8)).unwrap();
             }
@@ -105,8 +105,18 @@ fn incremental_proposals_match_sequential_insertion_after_every_refusal() {
                         added += usize::from(expected == Ok(true));
                         assert_eq!(proposal.check_insert(next), expected);
                         assert_eq!(proposal.new_records(), added);
-                        if !seen.contains(&expected) {
-                            seen.push(expected);
+                        assert_eq!(index.held() + proposal.new_bytes(), sequential.held());
+                        // The outcome's kind: a capacity refusal's bytes vary with the case.
+                        let kind = expected.map_err(|why| match why {
+                            Refusal::Capacity { .. } => Refusal::Capacity {
+                                budget: 0,
+                                held: 0,
+                                needed: 0,
+                            },
+                            other => other,
+                        });
+                        if !seen.contains(&kind) {
+                            seen.push(kind);
                         }
                     }
                     assert_eq!(index.inventory().copied().collect::<Vec<_>>(), before);
@@ -119,7 +129,11 @@ fn incremental_proposals_match_sequential_insertion_after_every_refusal() {
         Ok(false),
         Err(Refusal::Shape),
         Err(Refusal::DigestCollision),
-        Err(Refusal::Capacity),
+        Err(Refusal::Capacity {
+            budget: 0,
+            held: 0,
+            needed: 0,
+        }),
     ] {
         assert!(seen.contains(&outcome), "unexercised outcome: {outcome:?}");
     }

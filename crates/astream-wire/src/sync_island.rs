@@ -85,7 +85,7 @@ clean {
         (fun h => Nat.le_of_lt h)
 
     -- State of a bounded causal sync index and its set-recomputed projection:
-    --   retained       : retained verified headers in `Index` (`<= cap`)
+    --   retained       : bytes of the verified headers `Index` holds above its floor (`<= cap`)
     --   projected      : causal-ready headers emitted in `Projection.ordered` (`<= retained`)
     --   quarantined    : `0` = honest actor, `1` = actor equivocated in `forks()`
     --   actorProjected : headers of that actor emitted in `Projection.ordered`
@@ -96,7 +96,7 @@ clean {
       actorProjected : UInt64
 
     -- TLA+ Safety Invariant:
-    -- 1. `retained <= cap`: bounded index never exceeds configured capacity.
+    -- 1. `retained <= cap`: an index never holds more bytes above its floor than its budget.
     -- 2. `projected <= retained`: projection never emits more records than retained.
     -- 3. `quarantined = 1 -> actorProjected = 0`: once an actor equivocates,
     --    set-recomputation withdraws all of its records from `ordered` regardless
@@ -270,8 +270,8 @@ clean {
     -- 4. Two-Language Rust ↔ Clean Kernel-Certified Contract Definitions
     -- ========================================================================
 
-    def sync_within_capacity_isl (retained : UInt64) (capacity : UInt64) : Bool :=
-      decide (retained < capacity)
+    def sync_fits_budget_isl (held : UInt64) (needed : UInt64) (budget : UInt64) : Bool :=
+      decide (Nat.le (UInt64.toNat held + UInt64.toNat needed) (UInt64.toNat budget))
 
     def clamp_le_unfulfilled_isl (v : UInt64) (hi : UInt64) : UInt64 :=
       if hi < v then hi else v

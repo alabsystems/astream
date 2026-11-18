@@ -28,6 +28,14 @@ pub type Digest = [u8; 32];
 pub type Actor = [u8; 48];
 /// Bound on references carried by one record.
 pub const MAX_PARENTS: usize = 64;
+/// Bytes a retained header takes from an index's budget before its parents: its id (32), actor
+/// (48), sequence (8) and predecessor slot (32). A stated figure, not `size_of`, so every machine
+/// with one budget admits the same records.
+pub const HEADER_BYTES: u64 = 32 + 48 + 8 + 32;
+/// Bytes each parent reference adds to [`HEADER_BYTES`].
+pub const PARENT_BYTES: u64 = 32;
+/// The bytes of the largest shaped header: [`MAX_PARENTS`] parents.
+pub const MAX_HEADER_BYTES: u64 = HEADER_BYTES + PARENT_BYTES * MAX_PARENTS as u64;
 
 /// An authenticated record's replication header; payload semantics live above this index.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -51,8 +59,16 @@ pub enum Refusal {
     Shape,
     /// A previously supplied digest names a different header.
     DigestCollision,
-    /// The configured retained-record bound is full. Do not acknowledge this record.
-    Capacity,
+    /// The record does not fit in the bytes the budget leaves above the floor. Do not
+    /// acknowledge this record.
+    Capacity {
+        /// The index's stated budget ([`Index::with_budget`]).
+        budget: u64,
+        /// The bytes already held above the floor ([`Index::held`]), a proposal's included.
+        held: u64,
+        /// The bytes this record would take ([`Header::bytes`]).
+        needed: u64,
+    },
 }
 
 // The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
@@ -66,14 +82,14 @@ pub use crate::twins::sync_clamp_parent_count;
 pub use sync_island::sync_clamp_parent_count;
 
 contract_fn! {
-    /// Kernel-certified check that `retained` sits strictly below `capacity`
-    /// (`retained < capacity`), backed by `sync_within_capacity_isl` (`clean-kernel-defeq`)
-    /// and the Clean-origin [`sync_clamp_parent_count`] (`min(len, cap)`).
+    /// Kernel-certified check that a record of `needed` bytes fits beside the `held` bytes under
+    /// `budget` (`held + needed <= budget`, without wrapping), backed by `sync_fits_budget_isl`
+    /// (`clean-kernel-defeq`).
     #[must_use]
-    pub const fn sync_within_capacity(retained: u64, capacity: u64) -> bool
-    clauses [ensures result == (retained < capacity)]
+    pub const fn sync_fits_budget(held: u64, needed: u64, budget: u64) -> bool
+    clauses [ensures result == ((held as u128) + (needed as u128) <= (budget as u128))]
     {
-        retained < capacity
+        (held as u128) + (needed as u128) <= (budget as u128)
     }
 }
 
@@ -135,6 +151,16 @@ impl Header {
                 .is_none_or(|p| self.parents.binary_search(&p).is_ok())
     }
 
+    /// The bytes this header takes from an index's budget while it is held above the floor:
+    /// [`HEADER_BYTES`] and [`PARENT_BYTES`] for each parent. At most [`MAX_HEADER_BYTES`] for a
+    /// shaped header.
+    #[must_use]
+    pub fn bytes(&self) -> u64 {
+        PARENT_BYTES
+            .saturating_mul(self.parents.len() as u64)
+            .saturating_add(HEADER_BYTES)
+    }
+
     // Only shaped headers reach this helper: a predecessor then has sequence >= 2.
     fn claims(&self) -> impl Iterator<Item = (u64, Digest)> + '_ {
         std::iter::once((self.sequence, self.id)).chain(
@@ -180,13 +206,20 @@ impl Fork {
     }
 }
 
-/// Rebuildable, bounded causal index for ONE dataset/audience generation.
+/// Rebuildable causal index for ONE dataset/audience generation, bounded by a byte budget.
+///
+/// The budget counts the records held above the floor ([`Header::bytes`] each) and nothing below
+/// it: a floor record ([`Index::insert_floor`]) takes no bytes whatever its past, and a header
+/// the floor already holds is an identical duplicate. No record count bounds the index.
 #[derive(Clone, Debug)]
 pub struct Index {
     records: BTreeMap<Digest, Header>,
     /// Each retained actor's highest retained sequence, kept at insert ([`Index::frontier`]).
     frontier: BTreeMap<Actor, u64>,
-    capacity: usize,
+    /// The stated budget, in bytes ([`Index::with_budget`]).
+    budget: u64,
+    /// The bytes `records` holds: the sum of their [`Header::bytes`], at most `budget`.
+    held: u64,
     /// Records a checkpoint stands for ([`Index::insert_floor`]), apart from `records`.
     floor: BTreeMap<Digest, FloorRecord>,
 }
@@ -215,15 +248,17 @@ pub struct FloorRecord {
 pub struct Proposal<'index, 'headers> {
     index: &'index Index,
     proposed: BTreeMap<Digest, &'headers Header>,
+    /// The bytes of `proposed`, so `index.held + bytes` stays within the budget.
+    bytes: u64,
 }
 
 impl<'headers> Proposal<'_, 'headers> {
     /// Check one verified header, retaining its metadata hint on a new admission.
     /// `false` is an identical duplicate. A refusal reserves no room and leaves
-    /// earlier accepted proposals intact. This never reserves capacity in the
+    /// earlier accepted proposals intact. This never reserves room in the
     /// underlying index; actual insertion checks its then-current state again.
     /// # Errors
-    /// [`Refusal`] names malformed headers, digest collisions and exhausted capacity.
+    /// [`Refusal`] names malformed headers, digest collisions and an exhausted budget.
     pub fn check_insert(&mut self, header: &'headers Header) -> Result<bool, Refusal> {
         if !header.is_shaped() {
             return Err(Refusal::Shape);
@@ -232,17 +267,24 @@ impl<'headers> Proposal<'_, 'headers> {
             .proposed
             .get(&header.id)
             .copied()
-            .or_else(|| self.index.records.get(&header.id));
+            .or_else(|| self.index.held_header(&header.id));
         let accepted = Index::admit_shaped(
             header,
             old,
-            self.index.records.len().saturating_add(self.proposed.len()),
-            self.index.capacity,
+            self.index.held.saturating_add(self.bytes),
+            self.index.budget,
         )?;
         if accepted {
             self.proposed.insert(header.id, header);
+            self.bytes = self.bytes.saturating_add(header.bytes());
         }
         Ok(accepted)
+    }
+
+    /// The bytes of the distinct new headers accepted by this proposal.
+    #[must_use]
+    pub fn new_bytes(&self) -> u64 {
+        self.bytes
     }
 
     /// Number of distinct new headers accepted by this proposal.
@@ -582,19 +624,43 @@ impl Projection {
 }
 
 impl Index {
-    /// Empty index with an explicit capacity. The integrator also bounds payload bytes.
-    pub fn new(capacity: usize) -> Self {
+    /// Empty index that holds records above its floor within `budget` bytes ([`Header::bytes`]
+    /// each). The integrator also bounds payload bytes.
+    #[must_use]
+    pub const fn with_budget(budget: u64) -> Self {
         Self {
             records: BTreeMap::new(),
             frontier: BTreeMap::new(),
-            capacity,
+            budget,
+            held: 0,
             floor: BTreeMap::new(),
         }
     }
 
+    /// The stated budget, in bytes.
+    #[must_use]
+    pub const fn budget(&self) -> u64 {
+        self.budget
+    }
+
+    /// The bytes held above the floor: every retained header's [`Header::bytes`]. Floor records
+    /// and the history they stand for count nothing.
+    #[must_use]
+    pub const fn held(&self) -> u64 {
+        self.held
+    }
+
+    /// The header held under `id`, retained or as a floor record.
+    fn held_header(&self, id: &Digest) -> Option<&Header> {
+        self.records
+            .get(id)
+            .or_else(|| self.floor.get(id).map(|record| &record.header))
+    }
+
     /// Admit `record` as a floor record ([`FloorRecord`]). `false` when the index already holds
     /// that record, retained or as a floor record with the same past. A floor record takes no
-    /// capacity: it stands for history the index does not hold.
+    /// bytes of the budget, so a full index still admits one: it stands for history the index
+    /// does not hold.
     ///
     /// # Errors
     /// [`Refusal::Shape`] for a malformed header or a past that does not include the record's own
@@ -631,21 +697,16 @@ impl Index {
 
     /// Check admission of a verified header without changing this index.
     ///
-    /// `false` is an identical duplicate. This reserves no capacity: a later insertion
-    /// checks the then-current state again.
+    /// `false` is an identical duplicate, retained or a floor record. This reserves no room: a
+    /// later insertion checks the then-current state again.
     ///
     /// # Errors
-    /// [`Refusal`] names malformed headers, digest collisions and exhausted capacity.
+    /// [`Refusal`] names malformed headers, digest collisions and an exhausted budget.
     pub fn check_insert(&self, header: &Header) -> Result<bool, Refusal> {
         if !header.is_shaped() {
             return Err(Refusal::Shape);
         }
-        Self::admit_shaped(
-            header,
-            self.records.get(&header.id),
-            self.records.len(),
-            self.capacity,
-        )
+        Self::admit_shaped(header, self.held_header(&header.id), self.held, self.budget)
     }
 
     /// Start a borrowed admission proposal without reserving or cloning history.
@@ -655,14 +716,15 @@ impl Index {
         Proposal {
             index: self,
             proposed: BTreeMap::new(),
+            bytes: 0,
         }
     }
 
     /// Check a sequence of verified headers against this index and earlier headers
-    /// in the sequence, without cloning retained history or reserving capacity.
+    /// in the sequence, without cloning retained history or reserving room.
     /// Returns the number of distinct new headers. Duplicate identities are compared
-    /// with both retained and proposed headers, and consume no additional capacity.
-    /// Scratch space is proportional to distinct new headers, bounded by capacity.
+    /// with retained, floor and proposed headers, and take no additional bytes.
+    /// Scratch space is proportional to distinct new headers, bounded by the budget.
     /// Authentication and application policy remain the caller's obligations.
     ///
     /// # Errors
@@ -683,8 +745,8 @@ impl Index {
     fn admit_shaped(
         header: &Header,
         old: Option<&Header>,
-        retained: usize,
-        capacity: usize,
+        held: u64,
+        budget: u64,
     ) -> Result<bool, Refusal> {
         if let Some(old) = old {
             return if old == header {
@@ -693,31 +755,39 @@ impl Index {
                 Err(Refusal::DigestCollision)
             };
         }
-        if !sync_within_capacity(retained as u64, capacity as u64) {
-            return Err(Refusal::Capacity);
+        let needed = header.bytes();
+        if !sync_fits_budget(held, needed, budget) {
+            return Err(Refusal::Capacity {
+                budget,
+                held,
+                needed,
+            });
         }
         Ok(true)
     }
 
-    /// Insert a verified header. `false` is an identical duplicate.
+    /// Insert a verified header. `false` is an identical duplicate, retained or a floor record,
+    /// and takes no bytes.
     ///
     /// # Errors
-    /// [`Refusal`] names malformed headers, digest collisions and exhausted capacity.
+    /// [`Refusal`] names malformed headers, digest collisions and an exhausted budget.
     pub fn insert(&mut self, header: Header) -> Result<bool, Refusal> {
         if !header.is_shaped() {
             return Err(Refusal::Shape);
         }
-        // One search of `records`. The entry holds the map, so the retained count is read
+        if let Some(record) = self.floor.get(&header.id) {
+            return Self::admit_shaped(&header, Some(&record.header), self.held, self.budget);
+        }
+        // One search of `records`. The entry holds the map, so the held bytes are read
         // first; a vacant entry left unfilled changes nothing.
-        let retained = self.records.len();
-        let capacity = self.capacity;
+        let (held, budget) = (self.held, self.budget);
         match self.records.entry(header.id) {
-            Entry::Occupied(old) => {
-                Self::admit_shaped(&header, Some(old.get()), retained, capacity)
-            }
+            Entry::Occupied(old) => Self::admit_shaped(&header, Some(old.get()), held, budget),
             Entry::Vacant(slot) => {
-                let accepted = Self::admit_shaped(&header, None, retained, capacity)?;
+                let accepted = Self::admit_shaped(&header, None, held, budget)?;
                 if accepted {
+                    // Admitted within the budget, so the sum never saturates.
+                    self.held = held.saturating_add(header.bytes());
                     let highest = self.frontier.entry(header.actor).or_insert(0);
                     *highest = (*highest).max(header.sequence);
                     slot.insert(header);
@@ -1085,13 +1155,13 @@ mod tests {
             header(3, 1, 2, Some(1), &[1, 2]),
             header(4, 2, 2, Some(2), &[2]),
         ];
-        let mut reference = Index::new(8);
+        let mut reference = Index::with_budget(8 * MAX_HEADER_BYTES);
         for h in &records {
             reference.insert(h.clone()).unwrap();
         }
         let expected = reference.project();
         permutations(&records, &mut |order| {
-            let mut index = Index::new(8);
+            let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
             for h in order {
                 assert!(index.insert(h.clone()).unwrap());
                 assert!(!index.insert(h.clone()).unwrap());
@@ -1119,7 +1189,7 @@ mod tests {
         let b = header(2, 1, 1, None, &[]);
         let child = header(3, 2, 1, None, &[1]);
         permutations(&[a, b, child], &mut |order| {
-            let mut index = Index::new(8);
+            let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
             for h in order {
                 index.insert(h.clone()).unwrap();
             }
@@ -1136,7 +1206,9 @@ mod tests {
     }
     #[test]
     fn gaps_cycles_bad_predecessors_and_caps_cannot_become_visible() {
-        let mut index = Index::new(3);
+        // Room for exactly the three records it holds, two of them naming one parent.
+        let budget = 3 * HEADER_BYTES + 2 * PARENT_BYTES;
+        let mut index = Index::with_budget(budget);
         index.insert(header(2, 1, 2, Some(1), &[1])).unwrap();
         assert!(index.project().ordered.is_empty());
         index.insert(header(1, 2, 1, None, &[])).unwrap();
@@ -1148,7 +1220,11 @@ mod tests {
         index.insert(header(3, 3, 1, None, &[4])).unwrap();
         assert_eq!(
             index.insert(header(4, 4, 1, None, &[3])),
-            Err(Refusal::Capacity)
+            Err(Refusal::Capacity {
+                budget,
+                held: budget,
+                needed: HEADER_BYTES + PARENT_BYTES,
+            })
         );
         assert_eq!(index.inventory().count(), 3);
         assert!(!sequence_follows(u64::MAX, 0));
@@ -1158,7 +1234,7 @@ mod tests {
 
     #[test]
     fn policy_exclusions_withhold_dependents_without_losing_evidence() {
-        let mut index = Index::new(8);
+        let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
         for h in [
             header(1, 1, 1, None, &[]),
             header(2, 2, 1, None, &[1]),
@@ -1186,7 +1262,7 @@ mod tests {
             header(5, 3, 1, None, &[]),
         ];
         permutations(&records, &mut |order| {
-            let mut index = Index::new(8);
+            let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
             for h in order {
                 index.insert(h.clone()).unwrap();
             }
@@ -1207,7 +1283,7 @@ mod tests {
 
     #[test]
     fn matching_predecessor_claims_and_sequence_boundaries_are_not_forks() {
-        let mut index = Index::new(8);
+        let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
         index.insert(header(1, 1, 1, None, &[])).unwrap();
         index.insert(header(2, 1, 2, Some(1), &[1])).unwrap();
         index.insert(header(3, 2, u64::MAX, Some(4), &[4])).unwrap();
@@ -1247,7 +1323,7 @@ mod tests {
             ),
         ] {
             permutations(&records, &mut |order| {
-                let mut index = Index::new(8);
+                let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
                 for h in order {
                     index.insert(h.clone()).unwrap();
                 }
@@ -1286,7 +1362,7 @@ mod tests {
             ),
             repeats in proptest::collection::vec((0usize..40, 0usize..80), 0..6),
         ) {
-            let mut index = Index::new(rows.len());
+            let mut index = Index::with_budget(rows.len() as u64 * MAX_HEADER_BYTES);
             let mut tips = [None::<(u8, u64)>; 4];
             for (row, (actor, sequence, predecessor)) in rows.into_iter().enumerate() {
                 let id = row as u8;
@@ -1378,7 +1454,7 @@ mod tests {
                 .filter(|(bit, _)| mask >> bit & 1 == 1)
                 .map(|(_, h)| h)
                 .collect();
-            let mut index = Index::new(pool.len());
+            let mut index = Index::with_budget(pool.len() as u64 * MAX_HEADER_BYTES);
             for h in &set {
                 assert_eq!(index.insert((*h).clone()), Ok(true));
             }
@@ -1440,7 +1516,7 @@ mod tests {
                 (2, true, true),
                 (64, true, true),
             ] {
-                let mut index = Index::new(records);
+                let mut index = Index::with_budget(records as u64 * MAX_HEADER_BYTES);
                 for row in 0..records {
                     let sequence = if compatible_prefix {
                         if row < actors {
@@ -1590,7 +1666,7 @@ mod tests {
 
     #[test]
     fn observes_is_false_across_a_missing_intermediate() {
-        let mut index = Index::new(8);
+        let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
         index.insert(header(1, 1, 1, None, &[])).unwrap();
         index.insert(header(3, 1, 3, Some(2), &[2])).unwrap();
         assert!(
@@ -1606,7 +1682,7 @@ mod tests {
 
     #[test]
     fn observes_is_false_for_a_record_not_retained() {
-        let mut index = Index::new(8);
+        let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
         index.insert(header(1, 1, 1, None, &[])).unwrap();
         index.insert(header(3, 2, 1, None, &[1, 2])).unwrap();
         assert!(index.observes(&[3; 32], &[1; 32]));
@@ -1626,7 +1702,7 @@ mod tests {
 
     #[test]
     fn admission_queries_leave_room_unreserved_and_recheck_changed_state() {
-        let mut index = Index::new(1);
+        let mut index = Index::with_budget(HEADER_BYTES);
         let first = header(1, 1, 1, None, &[]);
         let other = header(2, 2, 1, None, &[]);
         for _ in 0..2 {
@@ -1634,8 +1710,13 @@ mod tests {
             assert_eq!(index.inventory().count(), 0);
         }
         assert_eq!(index.insert(other.clone()), Ok(true));
-        assert_eq!(index.check_insert(&first), Err(Refusal::Capacity));
-        assert_eq!(index.insert(first), Err(Refusal::Capacity));
+        let full = Err(Refusal::Capacity {
+            budget: HEADER_BYTES,
+            held: HEADER_BYTES,
+            needed: HEADER_BYTES,
+        });
+        assert_eq!(index.check_insert(&first), full);
+        assert_eq!(index.insert(first), full);
         assert_eq!(index.check_insert(&other), Ok(false));
         assert_eq!(index.inventory().count(), 1);
         assert_eq!(index.get(&other.id), Some(&other));
@@ -1643,7 +1724,7 @@ mod tests {
 
     #[test]
     fn a_refusal_leaves_the_whole_index_unchanged() {
-        let mut index = Index::new(3);
+        let mut index = Index::with_budget(FULL);
         for h in [
             header(1, 1, 1, None, &[]),
             header(2, 1, 1, None, &[]),
@@ -1675,8 +1756,12 @@ mod tests {
         assert_eq!(state(&index), before);
     }
 
+    /// The bytes of 1, 2 and 3 in `a_refusal_leaves_the_whole_index_unchanged`: three headers,
+    /// one naming a parent. That index is full.
+    const FULL: u64 = 3 * HEADER_BYTES + PARENT_BYTES;
+
     /// What `a_refusal_leaves_the_whole_index_unchanged` offers an index that holds 1, 2
-    /// and 3 at its capacity of 3, each with the refusal it must answer: nine shapes, the
+    /// and 3 in all of its budget ([`FULL`]), each with the refusal it must answer: nine shapes, the
     /// last under 1's id (the shape is judged before the id is looked up, so it is no
     /// collision), a collision with 1, and a shaped new header with no room.
     fn refused_headers() -> [(Header, Refusal); 11] {
@@ -1692,14 +1777,21 @@ mod tests {
             (header(200, 1, 1, None, &too_many), Refusal::Shape),
             (header(1, 1, 0, None, &[]), Refusal::Shape),
             (header(1, 7, 1, None, &[]), Refusal::DigestCollision),
-            (header(9, 7, 1, None, &[]), Refusal::Capacity),
+            (
+                header(9, 7, 1, None, &[]),
+                Refusal::Capacity {
+                    budget: FULL,
+                    held: FULL,
+                    needed: HEADER_BYTES,
+                },
+            ),
         ]
     }
 
     #[test]
     fn exactly_max_parents_is_shaped() {
         let most: Vec<u8> = (0..MAX_PARENTS as u8).collect();
-        let mut index = Index::new(1);
+        let mut index = Index::with_budget(MAX_HEADER_BYTES);
         assert_eq!(index.insert(header(200, 1, 1, None, &most)), Ok(true));
     }
 
@@ -1720,7 +1812,7 @@ mod tests {
         for (row, (h, shaped)) in headers.into_iter().zip(shaped).enumerate() {
             assert_eq!(h.is_shaped(), shaped, "row {row}: is_shaped");
             assert_eq!(
-                Index::new(1).insert(h) == Err(Refusal::Shape),
+                Index::with_budget(MAX_HEADER_BYTES).insert(h) == Err(Refusal::Shape),
                 !shaped,
                 "row {row}: insert"
             );
@@ -1731,7 +1823,7 @@ mod tests {
     fn every_order_and_duplicate_converges_on_what_it_withholds() {
         let records = withheld_history();
         let excluded = BTreeSet::from([[5; 32]]);
-        let mut reference = Index::new(16);
+        let mut reference = Index::with_budget(16 * MAX_HEADER_BYTES);
         for h in &records {
             reference.insert(h.clone()).unwrap();
         }
@@ -1751,7 +1843,7 @@ mod tests {
         );
         assert_eq!(projection_breach(&reference, &excluded, &view), None);
         permutations(&records, &mut |order| {
-            let mut index = Index::new(16);
+            let mut index = Index::with_budget(16 * MAX_HEADER_BYTES);
             for h in order {
                 assert_eq!(index.insert(h.clone()), Ok(true));
                 assert_eq!(index.insert(h.clone()), Ok(false));
@@ -1764,7 +1856,7 @@ mod tests {
 
     #[test]
     fn the_observation_law_catches_a_walk_that_crosses_a_missing_parent() {
-        let mut index = Index::new(8);
+        let mut index = Index::with_budget(8 * MAX_HEADER_BYTES);
         index.insert(header(1, 1, 1, None, &[])).unwrap();
         index.insert(header(3, 1, 3, Some(2), &[2])).unwrap();
         index.insert(header(4, 2, 1, None, &[3])).unwrap();
@@ -1794,7 +1886,7 @@ mod tests {
 
     #[test]
     fn the_projection_law_catches_a_dependent_of_a_quarantined_actor() {
-        let mut index = Index::new(16);
+        let mut index = Index::with_budget(16 * MAX_HEADER_BYTES);
         for h in withheld_history() {
             index.insert(h).unwrap();
         }

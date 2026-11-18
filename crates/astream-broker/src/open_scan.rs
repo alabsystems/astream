@@ -427,6 +427,48 @@ fn vec_drop_prefix<T>(v: &mut Vec<T>, k: usize) {
     v.truncate(keep);
 }
 
+/// Where a scan takes the log up: the records before it that an earlier fold already passed
+/// (a checkpoint's, `ckpt.rs`), and the byte the next one starts at.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Resume {
+    /// The records already passed: the next is record `base + count`.
+    pub(crate) count: usize,
+    /// The byte record `base + count` starts at, where a unit ended.
+    pub(crate) pos: usize,
+    /// The byte the floor's record starts at, when the floor lies among the records passed.
+    pub(crate) floor_at: Option<usize>,
+}
+
+/// The frames this thread decoded off a log's file (a test's count, `ckpt_tests.rs`).
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Decodes {
+    /// By a scan, each handed to its sink ([`scan_on`]).
+    pub(crate) scanned: usize,
+    /// For an open's resident window, read again ([`decode_run`]).
+    pub(crate) reread: usize,
+    /// To hold a checkpoint to its last record ([`unit_end_at`]).
+    pub(crate) bound: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What this thread's opens decoded since a test last cleared it.
+    pub(crate) static DECODED: std::cell::Cell<Decodes> =
+        const { std::cell::Cell::new(Decodes { scanned: 0, reread: 0, bound: 0 }) };
+}
+
+/// Count one frame decoded, where `field` says.
+#[cfg(test)]
+fn decoded(field: impl FnOnce(&mut Decodes) -> &mut usize) {
+    DECODED.with(|n| {
+        let mut d = n.get();
+        let slot = field(&mut d);
+        *slot = slot.saturating_add(1);
+        n.set(d);
+    });
+}
+
 /// THE OPEN'S SCAN of the log `src` holds: the longest intact, in-order prefix of records
 /// from `base`, each handed to `sink` as it is decoded, its byte length, and how the bytes end
 /// — the reference `scan_from`'s answer, through a window of `reading.window` bytes. A scan
@@ -440,6 +482,33 @@ pub(crate) fn scan(
     mutation: Mutation,
     sink: &mut impl Sink,
 ) -> io::Result<Streamed> {
+    scan_on(
+        src,
+        reading,
+        key,
+        base,
+        floor,
+        mutation,
+        Resume::default(),
+        sink,
+    )
+}
+
+/// [`scan`] taken up at `from`: the records before it are counted as passed and their bytes
+/// are not read, so what it reports (the count, the length, the last unit's end, the floor's
+/// byte) is what a scan from byte 0 reports of a log whose first `from.pos` bytes hold
+/// `from.count` intact records ending a unit there.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn scan_on(
+    src: &(impl ReadAt + ?Sized),
+    reading: Reading,
+    key: Option<AtRestRef<'_>>,
+    base: u64,
+    floor: Option<u64>,
+    mutation: Mutation,
+    from: Resume,
+    sink: &mut impl Sink,
+) -> io::Result<Streamed> {
     let Ok(len) = usize::try_from(src.byte_len()?) else {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -447,13 +516,13 @@ pub(crate) fn scan(
         ));
     };
     let mut win = Window::new(reading.window, len);
-    let mut count = 0usize;
-    let mut pos = 0usize;
-    let mut seal_end = (base, 0usize);
-    let mut floor_at = if floor == Some(base) {
-        Some(0usize)
+    let mut count = from.count;
+    let mut pos = from.pos;
+    let mut seal_end = (base.saturating_add(count as u64), pos);
+    let mut floor_at = if floor == Some(base.saturating_add(count as u64)) {
+        Some(pos)
     } else {
-        None
+        from.floor_at
     };
     let tail = loop {
         let expected = base.saturating_add(count as u64);
@@ -474,6 +543,8 @@ pub(crate) fn scan(
                 let _ = straddled;
                 let frame = rest.get(..consumed).unwrap_or(rest);
                 count = count.saturating_add(1);
+                #[cfg(test)]
+                decoded(|d| &mut d.scanned);
                 let more = sink.record(rec, bt, pos as u64, frame, mark.ends_a_unit());
                 // A decoded frame always consumes at least its header; guard anyway so a
                 // zero-progress decode can never spin.
@@ -570,6 +641,34 @@ pub(crate) fn frame_at(src: &(impl ReadAt + ?Sized), at: u64) -> io::Result<Vec<
     Ok(frame)
 }
 
+/// The stored frame at byte `at` of `src` when it is record `expected`, whole and ending a
+/// unit, as the scan judges a frame ([`step`]): what a checkpoint's last record must still be
+/// (`ckpt.rs`). `None` for anything else there, a frame that reads short included.
+pub(crate) fn unit_end_at(
+    src: &(impl ReadAt + ?Sized),
+    key: Option<AtRestRef<'_>>,
+    mutation: Mutation,
+    at: u64,
+    expected: u64,
+) -> io::Result<Option<Vec<u8>>> {
+    let frame = match frame_at(src, at) {
+        Ok(frame) => frame,
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let Ok(pos) = usize::try_from(at) else {
+        return Ok(None);
+    };
+    #[cfg(test)]
+    decoded(|d| &mut d.bound);
+    match step(&frame, key, expected, pos, mutation) {
+        Step::Record { mark, consumed, .. } if consumed == frame.len() && mark.ends_a_unit() => {
+            Ok(Some(frame))
+        }
+        Step::Record { .. } | Step::Stop(_) => Ok(None),
+    }
+}
+
 /// THE WINDOW READ AGAIN: the `count` records stored from byte `at` of `src` on, the first of
 /// them record `first`, each decoded as the scan decoded it ([`step`], through a window of
 /// `window` bytes) and handed to `each`. The open's scan lets a record go once it is folded,
@@ -607,6 +706,8 @@ pub(crate) fn decode_run(
         match step(win.from(pos), key, expected, pos, mutation) {
             Step::Record { rec, consumed, .. } if consumed > 0 => {
                 pos = pos.saturating_add(consumed);
+                #[cfg(test)]
+                decoded(|d| &mut d.reread);
                 if let Some(r) = Some(()).map(|()| each(rec)) {
                     r?;
                 }

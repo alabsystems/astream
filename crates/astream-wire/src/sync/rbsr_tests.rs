@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 use super::*;
-use crate::sync::Header;
+use crate::sync::{Header, MAX_HEADER_BYTES};
 
 pub(super) fn digest(mut seed: u64) -> Digest {
     let mut id = [0; 32];
@@ -34,7 +34,7 @@ pub(super) fn chain(actor: u8, count: u64) -> Vec<Header> {
 }
 
 pub(super) fn index(headers: impl IntoIterator<Item = Header>) -> Index {
-    let mut index = Index::new(100_000);
+    let mut index = Index::with_budget(100_000 * MAX_HEADER_BYTES);
     for header in headers {
         index.insert(header).unwrap();
     }
@@ -304,7 +304,7 @@ fn snapshot_storage_is_shareable_and_charges_prefix_metadata() {
     assert!(indexed_bytes > plain_bytes);
     let mostly_unknown = Snapshot::from_inventory(identities(&plain), &index([records[0].clone()]));
     assert!(mostly_unknown.retained_bytes() >= (2 * 8192 - 1) * size_of::<Digest>());
-    let unknown = Snapshot::from_inventory(identities(&plain), &Index::new(0));
+    let unknown = Snapshot::from_inventory(identities(&plain), &Index::with_budget(0));
     assert_eq!(unknown.retained_bytes(), plain_bytes);
     charge_grows_after_reserving(&indexed, |snapshot| {
         snapshot

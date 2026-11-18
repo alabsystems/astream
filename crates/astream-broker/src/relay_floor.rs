@@ -168,7 +168,6 @@ impl RelayFloors {
 
     /// The encoded form in `<log>.state`, each map's entries sorted so that equal floors encode
     /// equally.
-    #[cfg(feature = "retention")]
     pub(crate) fn encode(&self, out: &mut Vec<u8>) -> Option<()> {
         out.extend_from_slice(&u32::try_from(self.origins.len()).ok()?.to_le_bytes());
         let mut origins: Vec<_> = self.origins.iter().collect();
@@ -195,7 +194,6 @@ impl RelayFloors {
     }
 
     /// Read what [`encode`](Self::encode) wrote at `*pos`.
-    #[cfg(feature = "retention")]
     pub(crate) fn decode(bytes: &[u8], pos: &mut usize) -> Option<RelayFloors> {
         fn take<'a>(bytes: &'a [u8], pos: &mut usize, n: usize) -> Option<&'a [u8]> {
             let end = pos.checked_add(n)?;

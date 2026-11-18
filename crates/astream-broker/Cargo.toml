@@ -36,7 +36,7 @@ identity = ["handshake", "astream-aead/identity"]
 # record's body is its origin's Ed25519 signature and the payload, checked before it is
 # appended, so a build without this refuses every relayed record. The Ed25519 is ring's, through
 # astream-aead, with no handshake or transport.
-relay = ["cap", "dep:astream-aead", "dep:astream-digest", "astream-aead/signature"]
+relay = ["cap", "dep:astream-aead", "astream-aead/signature"]
 # Off by default: encrypt-at-rest for the durable log (Broker::open_encrypted /
 # BrokerLog::open_encrypted, and BrokerLog::seal_plaintext, the offline seal of a
 # plaintext log). Seals each record's payload and the .state/.held sidecars on disk
@@ -77,7 +77,9 @@ astream-wire = { workspace = true }
 astream-sys = { workspace = true }
 astream-cap = { workspace = true, optional = true }
 astream-aead = { workspace = true, optional = true }
-astream-digest = { workspace = true, optional = true }
+# The SHA-256 a batch publish hands back for each record (`store::record_digest`), and the
+# relayed record's envelope under `relay`. In-tree and zero-dependency, as astream-sys is.
+astream-digest = { workspace = true }
 
 # Dev-only, and IN-TREE (not third-party): the cognition-routing test publishes a
 # REAL astream-agent CogRecord through the bus. astream-agent's own lib graph is
@@ -89,7 +91,6 @@ astream-wire = { workspace = true }
 # For the cap-enforcement test only (mints capabilities); the LIB graph stays
 # zero-third-party (astream-cap is an OPTIONAL runtime dep behind the `cap` feature).
 astream-cap = { path = "../astream-cap" }
-astream-digest = { workspace = true }
 
 # The durability bench's test target runs the unit tests of `examples/bench_tier`, the
 # module both broker_durability_bench and broker_pipeline_bench mount: its knob parsing,

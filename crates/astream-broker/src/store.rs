@@ -81,6 +81,53 @@ impl From<io::Error> for CheckedPublishError {
     }
 }
 
+/// One record of a batch publish ([`BrokerLog::publish_batch_checked`]): the exactly-once
+/// key [`BrokerLog::publish`] takes, its subject and its body.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchRecord {
+    /// The producer the record is published under.
+    pub producer_id: u64,
+    /// That producer's sequence for it: with `producer_id`, the record's idempotency key.
+    pub producer_seq: u64,
+    /// The subject it is published on.
+    pub subject: String,
+    /// Its body.
+    pub body: Vec<u8>,
+}
+
+/// What [`BrokerLog::publish_batch_checked`] hands back for a batch.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BatchPublished {
+    /// The offset of the batch's first record. Record `i` is at `first + i`: a batch takes
+    /// consecutive offsets. For an empty batch, the log's head.
+    pub first: Offset,
+    /// [`record_digest`] of each record, in the batch's order.
+    pub digests: Vec<[u8; 32]>,
+    /// Nothing was appended: every key was already retained, naming these bytes at these
+    /// consecutive offsets (the batch landed before and this is its retry).
+    pub deduped: bool,
+}
+
+/// THE DIGEST OF A RECORD'S CONTENT: `SHA-256(u16le(len(subject)) || subject || body)`,
+/// what [`BrokerLog::publish_batch_checked`] hands back for each record of a batch.
+///
+/// It covers what the caller published and nothing the log added (the offset, the
+/// idempotency key, the broker time, the batch mark, a seal at rest), so it is the same
+/// for a record wherever it lands and however its frame is later re-encoded, and a caller
+/// that chains its records' digests has no reason to read back what it wrote. The length
+/// prefix keeps a subject's last bytes from being read as a body's first.
+///
+/// `None` for a subject longer than 65,535 bytes, whose length the prefix cannot state.
+#[must_use]
+pub fn record_digest(subject: &str, body: &[u8]) -> Option<[u8; 32]> {
+    let len = u16::try_from(subject.len()).ok()?;
+    let mut hash = astream_digest::Sha256::new();
+    hash.update_slice(&len.to_le_bytes());
+    hash.update_slice(subject.as_bytes());
+    hash.update_slice(body);
+    Some(hash.finalize())
+}
+
 #[cfg(clean_islands)]
 #[path = "store_island.rs"]
 mod store_island;
@@ -921,6 +968,9 @@ pub(crate) struct ReadOpen {
     pub(crate) drop_straddle: bool,
     /// Negative control: the tier keeps its window from the head of the log, not the tail.
     pub(crate) window_from_head: bool,
+    /// Negative control (`ckpt_tests.rs`): a checkpoint is taken up whatever log it was
+    /// taken of, its identity, its first frame and its last record's bytes unchecked.
+    pub(crate) unbound_checkpoint: bool,
 }
 
 #[cfg(test)]
@@ -970,10 +1020,22 @@ struct OpenFold {
     /// the scan passes it, its frame as stored.
     named_place: Option<usize>,
     named: Option<Vec<u8>>,
+    /// Whether [`finish`](Self::finish) hands back the fold's state as a checkpoint holds it
+    /// (`ckpt.rs`): the open may write one.
+    state: bool,
     /// The reference's records (a test's `ReadOpen::whole`).
     #[cfg(test)]
     whole: Option<Decoded>,
 }
+
+/// What the open's fold built ([`OpenFold::finish`]): the tier, the indices, where the newest
+/// record kept starts, and the fold's state for a checkpoint when the open asked for it.
+type Folded = (
+    crate::tier::Tier,
+    RebuiltIndices,
+    Option<u64>,
+    Option<Vec<u8>>,
+);
 
 impl OpenFold {
     fn new(
@@ -1002,9 +1064,21 @@ impl OpenFold {
             limit: None,
             named_place,
             named: None,
+            state: false,
             #[cfg(test)]
             whole: None,
         }
+    }
+
+    /// The fold keeping what a checkpoint of it needs (every record's charge), asked before
+    /// its first record, and handing its state back when it finishes. An open that keeps
+    /// checkpoints always asks: whether the one standing still binds is known only once the
+    /// identity is settled, after the fold is gone, and an open that leaves none behind after
+    /// a crash moved its generation would cost the next one the whole log.
+    fn for_checkpoint(mut self) -> OpenFold {
+        self.tier = self.tier.keeping_costs();
+        self.state = true;
+        self
     }
 
     /// Fold record `rec` into the indices and the tier.
@@ -1035,7 +1109,7 @@ impl OpenFold {
         mut self,
         kept: usize,
         reread: crate::tier::Reread<'_>,
-    ) -> io::Result<Option<(crate::tier::Tier, RebuiltIndices, Option<u64>)>> {
+    ) -> io::Result<Option<Folded>> {
         #[cfg(test)]
         if let Some(whole) = self.whole.take() {
             return Ok(Some(self.finish_whole(whole, kept)));
@@ -1047,10 +1121,18 @@ impl OpenFold {
         self.pending.truncate(more);
         self.commit();
         let newest_at = self.tier.newest_at();
+        // The fold as it stands at its last record kept, before the tier lets its charges go
+        // and the indices their fold-only half.
+        let state = if self.state {
+            ckpt::encode_state(&self.indices, &self.tier)
+        } else {
+            None
+        };
         Ok(Some((
             self.tier.finish(reread)?,
             self.indices.finish(),
             newest_at,
+            state,
         )))
     }
 
@@ -1058,11 +1140,7 @@ impl OpenFold {
     /// over them, and the tier built from them whole ([`crate::tier::Tier::from_parts`], the
     /// window decided from their tail).
     #[cfg(test)]
-    fn finish_whole(
-        mut self,
-        (mut records, mut bts, mut at): Decoded,
-        kept: usize,
-    ) -> (crate::tier::Tier, RebuiltIndices, Option<u64>) {
+    fn finish_whole(mut self, (mut records, mut bts, mut at): Decoded, kept: usize) -> Folded {
         records.truncate(kept);
         bts.truncate(kept);
         at.truncate(kept);
@@ -1072,7 +1150,7 @@ impl OpenFold {
         let newest_at = at.last().copied();
         let budget = self.tier.budget();
         let tier = crate::tier::Tier::from_parts(records, bts, at, budget);
-        (tier, self.indices.finish(), newest_at)
+        (tier, self.indices.finish(), newest_at, None)
     }
 }
 
@@ -1417,6 +1495,11 @@ pub struct BrokerLog {
     /// landed, the held store gave records up, the rules changed — so a tail looks again
     /// only then ([`gap_notice`](Self::gap_notice)).
     retention_epoch: u64,
+    /// [`OpenOptions::checkpoint_every`]: the bytes between this log's checkpoints.
+    checkpoint_every: Option<u64>,
+    /// Where the checkpoint beside the log stands (`ckpt.rs`): what
+    /// [`checkpoint_every`](Self::checkpoint_every) counts from.
+    checkpoint: ckpt::Standing,
     /// Encrypt-at-rest key and optional per-log 128-bit seal binding (`<log>.seal`).
     /// `Some` seals every record's payload and encrypted sidecar on disk under
     /// XChaCha20-Poly1305 (bound to `<log>.seal` and record index as AAD on v2 logs);
@@ -1575,6 +1658,18 @@ mod open_scan;
 #[cfg(test)]
 #[path = "open_scan_tests.rs"]
 mod open_scan_tests;
+
+/// The open's checkpoint, `<log>.ckpt`: the open's fold written down where a unit ended, so
+/// the next open scans only the frames after it (`ckpt.rs`, aterm tracker LT-A7).
+#[path = "ckpt.rs"]
+mod ckpt;
+#[cfg(feature = "retention")]
+pub(crate) use ckpt::discard as discard_checkpoint;
+
+/// The open from a checkpoint held to the full scan (`ckpt_tests.rs`).
+#[cfg(test)]
+#[path = "ckpt_tests.rs"]
+mod ckpt_tests;
 
 /// The latest-will map held to the read-back it replaced (`will_map_tests.rs`, aterm F19).
 #[cfg(test)]
@@ -2191,9 +2286,7 @@ pub(crate) fn rename_path(from: &Path, to: &Path) -> io::Result<()> {
 
 /// Flush `f`, the file at `at`, in full: its data and its size (`sync_all`). Under
 /// `cfg(test)` the compaction's power-loss model learns that the file's content as it
-/// stands now survives a power loss. (The sidecars that use it are the `retention` and
-/// `at-rest` features'.)
-#[cfg(any(feature = "retention", feature = "at-rest"))]
+/// stands now survives a power loss.
 pub(crate) fn flush_file(f: &File, at: &Path) -> io::Result<()> {
     astream_sys::full_sync(f)?;
     #[cfg(all(test, unix, feature = "retention"))]
@@ -2278,7 +2371,6 @@ fn open_state_file(path: &Path) -> io::Result<Option<File>> {
 /// planted at its name; `None` when there is none. Absence is returned only by this
 /// initial entry lookup; an entry changed or removed after it refuses
 /// ([`admit_sidecar`]).
-#[cfg(any(feature = "retention", feature = "at-rest"))]
 pub(crate) fn open_sidecar(
     path: &Path,
     cap: u64,
@@ -2306,7 +2398,6 @@ pub(crate) fn open_regular_sidecar(path: &Path, cap: u64) -> io::Result<File> {
 }
 
 /// The refusal of a sidecar that is not a regular file of at most its cap.
-#[cfg(any(feature = "retention", feature = "at-rest"))]
 fn not_a_bounded_sidecar(what: &str) -> io::Error {
     io::Error::new(
         io::ErrorKind::InvalidData,
@@ -2318,7 +2409,6 @@ fn not_a_bounded_sidecar(what: &str) -> io::Error {
 /// reading (and, `write`, writing) without following its final entry, nonblocking (so a
 /// substituted FIFO is refused without waiting for its peer), and validate the opened
 /// handle — a regular file of at most `cap` bytes — before any read.
-#[cfg(any(feature = "retention", feature = "at-rest"))]
 fn admit_sidecar(path: &Path, cap: u64, write: bool, what: &str) -> io::Result<File> {
     #[cfg(not(any(
         target_os = "macos",
@@ -2504,7 +2594,6 @@ pub(crate) fn create_fresh(path: &Path, opts: &mut FsOpenOptions) -> io::Result<
 /// past the umask, so a file that holds the log's records (a compaction's copy of them,
 /// its intent, its carried state, or `<log>.seal`) is never readable more widely than the
 /// log, even briefly. A file whose permissions cannot be set is removed.
-#[cfg(any(feature = "retention", feature = "at-rest"))]
 pub(crate) fn create_like(path: &Path, perms: &std::fs::Permissions) -> io::Result<File> {
     create_like_access(path, perms, false)
 }
@@ -2519,7 +2608,6 @@ pub(crate) fn create_like_read_write(
     create_like_access(path, perms, true)
 }
 
-#[cfg(any(feature = "retention", feature = "at-rest"))]
 fn create_like_access(path: &Path, perms: &std::fs::Permissions, read: bool) -> io::Result<File> {
     let mut opts = FsOpenOptions::new();
     opts.read(read);
@@ -2690,7 +2778,7 @@ fn is_virgin_empty_log(path: &Path, empty: bool) -> io::Result<bool> {
         return Ok(false);
     }
     for suffix in &[
-        ".id", ".base", ".state", ".replica", ".hw", ".compact", ".held",
+        ".id", ".base", ".state", ".replica", ".hw", ".compact", ".held", ".ckpt",
     ] {
         if !sidecar_absent(path, suffix)? {
             return Ok(false);
@@ -3903,6 +3991,22 @@ pub struct OpenOptions {
     /// indexes remain in memory and can grow with retained history; this is not a bound
     /// on total broker memory. `None` (the default) keeps every retained record decoded.
     pub resident_budget: Option<usize>,
+    /// `Some(bytes)`: keep a checkpoint of the open's fold beside the log (`<log>.ckpt`), so
+    /// that an open with a [`resident_budget`](Self::resident_budget) reads only the frames
+    /// written after it and a large log reopens in time proportional to its tail. One is
+    /// written at the end of an open, and by an append to a [`BrokerLog`] used directly
+    /// ([`BrokerLog::publish`], [`BrokerLog::publish_batch_checked`], [`BrokerLog::commit`]),
+    /// once the log has grown by `bytes`
+    /// since the last one, and
+    /// by as many as that one's own state took when that is more (writing one costs the whole
+    /// state, about 10 bytes a retained record). On an Ordered or Relaxed log the append that
+    /// makes one due first flushes the log in full ([`BrokerLog::sync_full`]): a checkpoint
+    /// covers only bytes a power loss cannot take, and a failure of that flush is the log's
+    /// as any failed full flush is. A [`Broker`](crate::Broker)'s writer
+    /// thread writes none between opens. `None` (the default) writes none; an open takes up a
+    /// checkpoint that is there and still bound to the log either way, and removes one that
+    /// is not. Not used on a replica.
+    pub checkpoint_every: Option<u64>,
     /// When a [`BrokerLog`] used directly acknowledges a record ([`Acks::Publish`] by
     /// default): an embedder that acks only what a full flush covered says
     /// [`Acks::FullFlush`], and its Ordered run's unclean stop then moves no generation.
@@ -3945,6 +4049,13 @@ impl OpenOptions {
     #[must_use]
     pub const fn with_resident_budget(mut self, budget: usize) -> Self {
         self.resident_budget = Some(budget);
+        self
+    }
+
+    /// Builder helper setting [`Self::checkpoint_every`].
+    #[must_use]
+    pub const fn with_checkpoint_every(mut self, bytes: u64) -> Self {
+        self.checkpoint_every = Some(bytes);
         self
     }
 
@@ -4022,7 +4133,8 @@ impl fmt::Debug for OpenOptions {
             .field("health_every", &self.health_every)
             .field("selective_tail_wake", &self.selective_tail_wake)
             .field("sticky_batch_refusal", &self.sticky_batch_refusal)
-            .field("resident_budget", &self.resident_budget);
+            .field("resident_budget", &self.resident_budget)
+            .field("checkpoint_every", &self.checkpoint_every);
         // Keys and secrets are never printed.
         #[cfg(feature = "cap")]
         {
@@ -5296,6 +5408,7 @@ impl BrokerLog {
             if created {
                 let _ = remove_file_path(&marker);
                 let _ = remove_file_path(&state_path(&path));
+                ckpt::discard(&path);
                 #[cfg(feature = "retention")]
                 crate::compact::clear_created(&path);
             }
@@ -5426,160 +5539,279 @@ impl BrokerLog {
             exact: prior.closed_clean(),
             end: len as u64,
         };
-        let mut fold = OpenFold::new(compacted, (budget, expect), named_place, opts);
+        // THE CHECKPOINT (`ckpt.rs`): the fold an earlier open or commit left where a unit
+        // ended, taken up when it is still bound to this log, so the scan reads only the
+        // frames after it. Not on a replica, under a repair, or with no residency budget
+        // (the module's head says why), and never a reason to refuse: an open that fails
+        // from one is tried again as the full scan below.
         #[cfg(test)]
-        let streamed = match &whole_bytes {
-            Some(existing) => {
-                let w = scan_from(existing, at_rest_ref, base.0, floor, mutation);
-                let rest = existing.get(w.scan.valid_len..).unwrap_or(&[]).to_vec();
-                fold.whole = Some((w.records, w.record_bts, w.record_at));
-                open_scan::Streamed { scan: w.scan, rest }
+        let plain_read = !opts.read.whole && !opts.read.window_from_head;
+        #[cfg(not(test))]
+        let plain_read = true;
+        let may_checkpoint = dir.is_os() && !replica && plain_read;
+        let writes_checkpoint = may_checkpoint && opts.checkpoint_every.is_some();
+        let takes_checkpoint = may_checkpoint
+            && !repair
+            && !created
+            && len > 0
+            && budget != crate::tier::Tier::RESIDENT_ALL;
+        let seed = match (takes_checkpoint, prior.identity(), &first) {
+            (true, Some(identity), Some(first)) => {
+                let bound = ckpt::Bound {
+                    base: base.0,
+                    identity,
+                    first: log_identity(first),
+                    len: len as u64,
+                    key: at_rest_ref,
+                    mutation,
+                    #[cfg(test)]
+                    unbound: opts.read.unbound_checkpoint,
+                };
+                ckpt::load(&file, &path, &bound, |records| {
+                    let known = crate::tier::Expect {
+                        records: expect.records.max(records),
+                        exact: expect.exact,
+                        end: expect.end,
+                    };
+                    let mut tier = crate::tier::Tier::opening(budget, known);
+                    if writes_checkpoint {
+                        tier = tier.keeping_costs();
+                    }
+                    tier.reserve(records);
+                    tier
+                })
+                .and_then(|seed| Some((seed.resume(floor)?, seed)))
             }
-            None => open_scan::scan(
+            _ => None,
+        };
+        let seeded = seed.is_some();
+        // The scan and the fold, from the checkpoint `seed` or from the carried state
+        // `compacted`: what the recovery keeps, and the tier and the indices over it.
+        let scan_and_fold = |seed: Option<(open_scan::Resume, ckpt::Seed)>,
+                             compacted: CompactedState|
+         -> io::Result<_> {
+            let standing = seed.as_ref().map(|(_, seed)| (seed.header, seed.size));
+            let fresh = if seed.is_some() {
+                // The checkpoint's own tier takes this one's place.
+                crate::tier::Expect {
+                    records: 0,
+                    exact: false,
+                    end: len as u64,
+                }
+            } else {
+                expect
+            };
+            let mut fold = OpenFold::new(compacted, (budget, fresh), named_place, opts);
+            if writes_checkpoint {
+                fold = fold.for_checkpoint();
+            }
+            let from = match seed {
+                Some((from, seed)) => {
+                    // The frame the last open's newest record had, when the checkpoint
+                    // already passed it: read where the checkpoint says it starts.
+                    if let Some(place) = named_place.filter(|&place| place < from.count) {
+                        let Some(at) = seed.tier.at(place) else {
+                            return Err(io::Error::other("the checkpoint lost a record's place"));
+                        };
+                        fold.named = Some(open_scan::frame_at(&file, at)?);
+                    }
+                    fold.indices = seed.indices;
+                    fold.tier = seed.tier;
+                    fold.seen = from.count;
+                    from
+                }
+                None => open_scan::Resume::default(),
+            };
+            #[cfg(test)]
+            let streamed = match &whole_bytes {
+                Some(existing) => {
+                    let w = scan_from(existing, at_rest_ref, base.0, floor, mutation);
+                    let rest = existing.get(w.scan.valid_len..).unwrap_or(&[]).to_vec();
+                    fold.whole = Some((w.records, w.record_bts, w.record_at));
+                    open_scan::Streamed { scan: w.scan, rest }
+                }
+                None => open_scan::scan_on(
+                    &file,
+                    reading,
+                    at_rest_ref,
+                    base.0,
+                    floor,
+                    mutation,
+                    from,
+                    &mut fold,
+                )?,
+            };
+            #[cfg(not(test))]
+            let streamed = open_scan::scan_on(
                 &file,
                 reading,
                 at_rest_ref,
                 base.0,
                 floor,
                 mutation,
+                from,
                 &mut fold,
-            )?,
-        };
-        #[cfg(not(test))]
-        let streamed = open_scan::scan(
-            &file,
-            reading,
-            at_rest_ref,
-            base.0,
-            floor,
-            mutation,
-            &mut fold,
-        )?;
-        let open_scan::Streamed { scan, rest } = streamed;
-        let classified = recover::classify(
-            &scan,
-            &recover::Judge {
-                rest: &rest,
-                key: at_rest_ref,
-                base: base.0,
-                floor,
-                unclean_relaxed: unclean.is_some() && prior.served_relaxed() && floor.is_some(),
-                prior_relaxed: prior.served_relaxed(),
-                same_boot: prior.same_boot(boot, boot_volume),
-                mutation,
-            },
-        );
-        drop(rest);
-        let (keep, kept_records, written, repair_cut) = match classified {
-            Classified::Keep {
-                keep,
-                records,
-                written,
-            } => (keep, records, written, false),
-            Classified::Corrupt {
-                offset,
-                at_byte,
-                reason,
-                repair_at,
-            } => {
-                Self::refuse_or_repair(
-                    &path,
-                    len,
-                    (repair, at_rest_ref.is_some()),
-                    (offset, at_byte),
-                    &reason,
+            )?;
+            let open_scan::Streamed { scan, rest } = streamed;
+            let classified = recover::classify(
+                &scan,
+                &recover::Judge {
+                    rest: &rest,
+                    key: at_rest_ref,
+                    base: base.0,
+                    floor,
+                    unclean_relaxed: unclean.is_some() && prior.served_relaxed() && floor.is_some(),
+                    prior_relaxed: prior.served_relaxed(),
+                    same_boot: prior.same_boot(boot, boot_volume),
+                    mutation,
+                },
+            );
+            drop(rest);
+            let (keep, kept_records, written, repair_cut) = match classified {
+                Classified::Keep {
+                    keep,
+                    records,
+                    written,
+                } => (keep, records, written, false),
+                Classified::Corrupt {
+                    offset,
+                    at_byte,
+                    reason,
                     repair_at,
-                )?;
-                (at_byte, scan.count, true, true)
+                } => {
+                    Self::refuse_or_repair(
+                        &path,
+                        len,
+                        (repair, at_rest_ref.is_some()),
+                        (offset, at_byte),
+                        &reason,
+                        repair_at,
+                    )?;
+                    (at_byte, scan.count, true, true)
+                }
+                // A record in a NEWER format than this build reads was WRITTEN, not damaged:
+                // its payload passed the frame CRC (and, at rest, authentication) before its
+                // version byte was read. It is refused by name on EVERY open, `open_repair`
+                // included — truncating it would destroy records the release that wrote them
+                // reads — and the file is left untouched.
+                Classified::Newer {
+                    offset,
+                    at_byte,
+                    version,
+                } => {
+                    return Err(newer_record(&path, offset, at_byte, version));
+                }
+            };
+            let named = fold.named.take();
+            #[cfg(test)]
+            let named = match (&whole_bytes, prior.newest_place(base.0)) {
+                (Some(existing), Some(place)) => {
+                    let pre_cut = existing.get(..scan.valid_len).unwrap_or(&[]);
+                    logid::nth_frame(pre_cut, place).map(<[u8]>::to_vec)
+                }
+                (Some(_), None) => None,
+                (None, _) => named,
+            };
+            // The tier and the indices over the records the recovery kept, the tier's window
+            // read again from the file once the scan let its records go. A fold that already
+            // folded records the recovery cut (a unit longer than `OPEN_PENDING` that never
+            // ended, or a checkpoint above the cut) folds the log again, up to the cut.
+            let mut reread =
+                |at: u64,
+                 first: u64,
+                 count: usize,
+                 each: &mut dyn FnMut(BrokerRecord) -> io::Result<()>| {
+                    open_scan::decode_run(
+                        &file,
+                        reading.window,
+                        at_rest_ref,
+                        mutation,
+                        (at, first, count),
+                        each,
+                    )
+                };
+            let (tier, rebuilt, newest_at, state) = match fold.finish(kept_records, &mut reread)? {
+                Some(built) => built,
+                None => {
+                    let compacted = if dir.is_os() {
+                        read_state(&path, at_rest_ref, base.0)?
+                    } else {
+                        CompactedState::default()
+                    };
+                    #[cfg(test)]
+                    REFOLDS.with(|n| n.set(n.get().saturating_add(1)));
+                    let exactly = crate::tier::Expect {
+                        records: kept_records,
+                        exact: true,
+                        end: len as u64,
+                    };
+                    let mut again = OpenFold::new(compacted, (budget, exactly), None, opts);
+                    if writes_checkpoint {
+                        again = again.for_checkpoint();
+                    }
+                    again.limit = Some(kept_records);
+                    if kept_records > 0 {
+                        open_scan::scan(
+                            &file,
+                            reading,
+                            at_rest_ref,
+                            base.0,
+                            floor,
+                            mutation,
+                            &mut again,
+                        )?;
+                    }
+                    match again.finish(kept_records, &mut reread)? {
+                        Some(built) => built,
+                        None => return Err(io::Error::other("the open's refold passed its cut")),
+                    }
+                }
+            };
+            if tier.len() != kept_records {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!(
+                        "{}: the open folded {} records where its recovery kept {kept_records}",
+                        path.display(),
+                        tier.len()
+                    ),
+                ));
             }
-            // A record in a NEWER format than this build reads was WRITTEN, not damaged:
-            // its payload passed the frame CRC (and, at rest, authentication) before its
-            // version byte was read. It is refused by name on EVERY open, `open_repair`
-            // included — truncating it would destroy records the release that wrote them
-            // reads — and the file is left untouched.
-            Classified::Newer {
-                offset,
-                at_byte,
-                version,
-            } => {
-                return Err(newer_record(&path, offset, at_byte, version));
+            // A checkpoint the recovery cut below stands for nothing this open keeps.
+            let standing = standing.filter(|(h, _)| h.count <= kept_records as u64);
+            Ok((
+                (scan.count, keep, kept_records, written, repair_cut),
+                named,
+                (tier, rebuilt, newest_at, state),
+                standing,
+            ))
+        };
+        let folded = match scan_and_fold(seed, compacted) {
+            // What a checkpoint is trusted for is the frames below it, unread: an open that
+            // fails from one is judged again by the scan that reads them.
+            Err(_) if seeded => {
+                #[cfg(test)]
+                ckpt::OPENS.with(|n| n.set((n.get().0, n.get().1.saturating_add(1))));
+                let compacted = read_state(&path, at_rest_ref, base.0)?;
+                scan_and_fold(None, compacted)
+            }
+            folded => {
+                #[cfg(test)]
+                if seeded && folded.is_ok() {
+                    ckpt::OPENS.with(|n| n.set((n.get().0.saturating_add(1), n.get().1)));
+                }
+                folded
             }
         };
-        let pre_cut_head = base.0.saturating_add(scan.count as u64);
+        let (
+            (scanned, keep, kept_records, written, repair_cut),
+            named,
+            (tier, rebuilt, newest_at, checkpoint_state),
+            standing,
+        ) = folded?;
+        let pre_cut_head = base.0.saturating_add(scanned as u64);
         let kept_head = base.0.saturating_add(kept_records as u64);
         let dropped = len.saturating_sub(keep) as u64;
-        let named = fold.named.take();
-        #[cfg(test)]
-        let named = match (&whole_bytes, prior.newest_place(base.0)) {
-            (Some(existing), Some(place)) => {
-                let pre_cut = existing.get(..scan.valid_len).unwrap_or(&[]);
-                logid::nth_frame(pre_cut, place).map(<[u8]>::to_vec)
-            }
-            (Some(_), None) => None,
-            (None, _) => named,
-        };
-        // The tier and the indices over the records the recovery kept, the tier's window read
-        // again from the file once the scan let its records go. A fold that already folded
-        // records the recovery cut (a unit longer than `OPEN_PENDING` that never ended) folds
-        // the log again, up to the cut.
-        let mut reread =
-            |at: u64,
-             first: u64,
-             count: usize,
-             each: &mut dyn FnMut(BrokerRecord) -> io::Result<()>| {
-                open_scan::decode_run(
-                    &file,
-                    reading.window,
-                    at_rest_ref,
-                    mutation,
-                    (at, first, count),
-                    each,
-                )
-            };
-        let (tier, rebuilt, newest_at) = match fold.finish(kept_records, &mut reread)? {
-            Some(built) => built,
-            None => {
-                let compacted = if dir.is_os() {
-                    read_state(&path, at_rest_ref, base.0)?
-                } else {
-                    CompactedState::default()
-                };
-                #[cfg(test)]
-                REFOLDS.with(|n| n.set(n.get().saturating_add(1)));
-                let exactly = crate::tier::Expect {
-                    records: kept_records,
-                    exact: true,
-                    end: len as u64,
-                };
-                let mut again = OpenFold::new(compacted, (budget, exactly), None, opts);
-                again.limit = Some(kept_records);
-                if kept_records > 0 {
-                    open_scan::scan(
-                        &file,
-                        reading,
-                        at_rest_ref,
-                        base.0,
-                        floor,
-                        mutation,
-                        &mut again,
-                    )?;
-                }
-                match again.finish(kept_records, &mut reread)? {
-                    Some(built) => built,
-                    None => return Err(io::Error::other("the open's refold passed its cut")),
-                }
-            }
-        };
-        if tier.len() != kept_records {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "{}: the open folded {} records where its recovery kept {kept_records}",
-                    path.display(),
-                    tier.len()
-                ),
-            ));
-        }
         // The first and the newest kept frames, as stored: what the identity rules read of
         // what the open keeps. The newest is read where the fold says it starts.
         #[cfg(test)]
@@ -5734,6 +5966,8 @@ impl BrokerLog {
             #[cfg(feature = "retention")]
             hold,
             retention_epoch: 0,
+            checkpoint_every: opts.checkpoint_every.filter(|_| may_checkpoint),
+            checkpoint: ckpt::Standing::default(),
             at_rest_key,
             head_watermark,
             replication_epoch: 0,
@@ -5744,6 +5978,9 @@ impl BrokerLog {
         // recovered from the bytes, so a broker restart cannot hand a producer back a
         // budget its registered wills already hold.
         log.reserve_pending_will_subjects();
+        if log.dir.is_os() {
+            log.checkpoint_opened(checkpoint_state, standing, takes_checkpoint || repair);
+        }
         Ok((log, dropped))
     }
 
@@ -6918,6 +7155,10 @@ impl BrokerLog {
         astream_sys::full_sync(&f)?;
         sync_parent_dir(&marker)?;
         self.replica = true;
+        // A replica keeps no checkpoint: its leader may truncate below any point of it.
+        ckpt::discard(&self.path);
+        self.checkpoint_every = None;
+        self.checkpoint = ckpt::Standing::default();
         eprintln!(
             "astream-broker: log {} is now a REPLICATION TARGET. Its records are a \
              leader's spine; this broker appends nothing of its own to it and fires \
@@ -7356,23 +7597,289 @@ impl BrokerLog {
         body: Vec<u8>,
     ) -> Result<(Offset, bool), CheckedPublishError> {
         self.check_poisoned()?;
-        if let Some(offset) = self.durable_produced_dup(producer_id, producer_seq) {
-            let record = self
-                .read_range(offset, 1)
-                .into_iter()
-                .next()
-                .filter(|r| r.seq == offset)
-                .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        "dedup key has no retained record",
-                    )
-                })?;
-            if record.subject != subject || record.body != body {
-                return Err(CheckedPublishError::Conflict(record));
+        self.retained_as(producer_id, producer_seq, &subject, &body)?;
+        Ok(self.publish(producer_id, producer_seq, subject, body)?)
+    }
+
+    /// Where the retained dedup window holds `(producer_id, producer_seq)`, once the record
+    /// there is seen to be these bytes: `None` for a key it does not hold, and a
+    /// [`Conflict`](CheckedPublishError::Conflict) carrying the original for a key that
+    /// names other bytes. The content check of [`publish_checked`](Self::publish_checked)
+    /// and of [`publish_batch_checked`](Self::publish_batch_checked).
+    fn retained_as(
+        &self,
+        producer_id: u64,
+        producer_seq: u64,
+        subject: &str,
+        body: &[u8],
+    ) -> Result<Option<Offset>, CheckedPublishError> {
+        let Some(offset) = self.durable_produced_dup(producer_id, producer_seq) else {
+            return Ok(None);
+        };
+        let record = self
+            .read_range(offset, 1)
+            .into_iter()
+            .next()
+            .filter(|r| r.seq == offset)
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "dedup key has no retained record",
+                )
+            })?;
+        if record.subject != subject || record.body != body {
+            return Err(CheckedPublishError::Conflict(record));
+        }
+        Ok(Some(offset))
+    }
+
+    /// PUBLISH A BATCH AS ONE WRITE, and hand back the digest of each record
+    /// ([`record_digest`]): every record is staged, the batch is committed once (one write
+    /// and the one flush the tier owes, as a batch of the broker's writer is), and the
+    /// records take consecutive offsets from [`BatchPublished::first`]. What
+    /// [`publish_checked`](Self::publish_checked) is for one record, for a group: `n`
+    /// records cost one device write and one flush where `n` calls of it cost `n` of each.
+    ///
+    /// The digests are computed from the records as staged, before the write. A caller
+    /// that chains its records (aterm's journal) extends its chain from them and does not
+    /// read the log back.
+    ///
+    /// ALL OR NOTHING. Any refusal below leaves the log as it was, with no record of the
+    /// batch appended. And the batch is written with its seal, so on a Strict or Ordered
+    /// log, and on a Relaxed one that stopped cleanly or is reopened in the boot that wrote
+    /// it, a crash leaves all of it or none: recovery cuts a torn batch at its start. After
+    /// an UNCLEAN stop of a Relaxed run recovery keeps the longest intact prefix
+    /// (`recover.rs`), which can end inside a batch; the generation moves for it, and the
+    /// retry of that batch is then refused as part-retained (below), so its caller
+    /// publishes what is missing itself. The refusals:
+    ///
+    /// - a hidden subject, a subject longer than 65,535 bytes (no [`record_digest`]), a
+    ///   record too large for a frame, or one that would take its producer past
+    ///   [`MAX_SUBJECTS_PER_PRODUCER`] distinct subjects, counting the batch's own;
+    /// - a key an earlier record of the batch took: the same producer and sequence, or a
+    ///   predecessor's at that sequence when this record's producer continues it
+    ///   ([`set_producer_lineage`](Self::set_producer_lineage)); one answer cannot give
+    ///   both their place. (As for [`publish`](Self::publish) the lineage reads one way: a
+    ///   predecessor's key after its successor's is a key of its own.)
+    /// - a retained key that names other bytes: the
+    ///   [`Conflict`](CheckedPublishError::Conflict) carries the original;
+    /// - a batch of which some keys are retained and some are not, or whose retained
+    ///   records are not consecutive in the batch's order: it is neither a new batch nor
+    ///   the retry of one, and appending the new part would break the consecutive offsets
+    ///   the answer states.
+    ///
+    /// A RETRY. A batch whose every key is retained, naming identical bytes at consecutive
+    /// offsets, landed before: nothing is appended and the answer is its original offset
+    /// and the same digests, with [`BatchPublished::deduped`] set. As for `publish_checked`
+    /// this reads the RETAINED dedup window, which retention shortens.
+    ///
+    /// THE ONE FLUSH is the tier's (full on Strict, a barrier on Ordered, none on Relaxed),
+    /// and FULL on any tier for a batch that holds an escalated record, as the un-batched
+    /// append's is: the batch is durable when the call returns, and a failure of that
+    /// flush rolls the whole batch back. The retry of a batch that holds one is flushed in
+    /// full before it is answered, when nothing covers it yet. An empty batch writes and
+    /// flushes nothing. With [`OpenOptions::checkpoint_every`] the batch that makes a
+    /// checkpoint due writes it, as an un-batched append does: on an Ordered or Relaxed
+    /// log that first flushes the log in full ([`sync_full`](Self::sync_full)), a second
+    /// flush, and a failure of it is the log's as any failed full flush is.
+    ///
+    /// # Errors
+    /// The refusals above; a batch already staged on this log; a log that is poisoned,
+    /// closed or released. An I/O error of the batch's write or of its flush rolls the
+    /// batch back, and nothing of it is in the log. Where the error leaves the log POISONED
+    /// ([`poisoned`](Self::poisoned): the rollback could not be made, the flush failed
+    /// above records an earlier flush did not cover, or an anti-rollback watermark could
+    /// not follow the batch) the batch's outcome is unknown until the log is reopened.
+    pub fn publish_batch_checked(
+        &mut self,
+        records: Vec<BatchRecord>,
+    ) -> Result<BatchPublished, CheckedPublishError> {
+        self.check_poisoned()?;
+        if !self.staged.is_empty() {
+            return Err(io::Error::other(
+                "publish_batch_checked: a batch is staged; commit or abort it first",
+            )
+            .into());
+        }
+        // Everything that can be refused without staging is, before a record is staged:
+        // the subjects, and each retained key's bytes and place.
+        let mut retained = Vec::new();
+        for rec in &records {
+            if is_hidden_subject(&rec.subject) {
+                return Err(reserved_err(&rec.subject).into());
+            }
+            if u16::try_from(rec.subject.len()).is_err() {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "publish_batch_checked: a subject over 65,535 bytes has no record digest",
+                )
+                .into());
+            }
+            if let Some(offset) =
+                self.retained_as(rec.producer_id, rec.producer_seq, &rec.subject, &rec.body)?
+            {
+                retained.push(offset);
             }
         }
-        Ok(self.publish(producer_id, producer_seq, subject, body)?)
+        if !retained.is_empty() {
+            return self.batch_retried(&records, &retained);
+        }
+        let first = self.next;
+        for rec in records {
+            let staged = self.stage_batch_record(rec);
+            if let Err(e) = staged {
+                self.abort_batch();
+                return Err(e.into());
+            }
+        }
+        let mut digests = Vec::with_capacity(self.staged.len());
+        for rec in &self.staged {
+            let Some(digest) = record_digest(&rec.subject, &rec.body) else {
+                self.abort_batch();
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "publish_batch_checked: a staged subject has no record digest",
+                )
+                .into());
+            };
+            digests.push(digest);
+        }
+        // One write and one flush for the whole batch: `commit_batch`'s halves, back to
+        // back. A batch that holds an escalated record takes a FULL flush as its own on
+        // any tier, as the un-batched append does (`append_frame`), where the broker's
+        // writer holds the head and issues one outside the log's lock: a log used directly
+        // has no reader to keep waiting, and a full flush that fails as the batch's own
+        // rolls the batch back, where one issued after the commit could only poison the
+        // log around records already promoted.
+        let committed = match self.commit_begin()? {
+            Begun::Write(mut write) => {
+                if self.staged_escalated.is_some() {
+                    write.flush = Flush::Full;
+                }
+                let res = write.run();
+                self.commit_end(write, res)?
+            }
+            Begun::Empty(committed) => committed,
+        };
+        // A head still held from before this call (another path's escalated batch that no
+        // full flush has covered) is covered before this one answers.
+        if committed.owe_full.is_some() {
+            self.sync_full()?;
+        }
+        // A log used directly keeps its checkpoint from its appends (`append_record`).
+        self.checkpoint_if_due();
+        Ok(BatchPublished {
+            first,
+            digests,
+            deduped: false,
+        })
+    }
+
+    /// Stage one record of [`publish_batch_checked`](Self::publish_batch_checked), whose
+    /// subject is already seen not to be hidden and whose key the durable window does not
+    /// hold: refused when an earlier record of the batch took the key.
+    fn stage_batch_record(&mut self, rec: BatchRecord) -> io::Result<()> {
+        let BatchRecord {
+            producer_id,
+            producer_seq,
+            subject,
+            body,
+        } = rec;
+        if self.produced_dup(producer_id, producer_seq).is_some() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "publish_batch_checked: the batch names key ({producer_id}, \
+                     {producer_seq}) twice"
+                ),
+            ));
+        }
+        let Some(seq) = self.next_staged_seq() else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "offset overflow",
+            ));
+        };
+        let staged = self.stage_record(BrokerRecord {
+            seq,
+            producer_id,
+            producer_seq,
+            subject,
+            body,
+            commit: None,
+        });
+        match staged {
+            Ok(()) => Ok(()),
+            Err(StageErr::TooLarge) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                "message too large",
+            )),
+            Err(StageErr::SubjectBound(msg)) => {
+                Err(io::Error::new(io::ErrorKind::InvalidInput, msg))
+            }
+            Err(StageErr::Io(e)) => Err(e),
+            Err(_) => Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "publish_batch_checked: a record could not be staged",
+            )),
+        }
+    }
+
+    /// The answer to a batch of which `retained` keys are already in the log, each seen to
+    /// name its record's bytes ([`retained_as`](Self::retained_as)): the retry of a batch
+    /// that landed, when that is every key and the records stand at consecutive offsets in
+    /// the batch's order; anything else is refused. Nothing is appended either way.
+    fn batch_retried(
+        &mut self,
+        records: &[BatchRecord],
+        retained: &[Offset],
+    ) -> Result<BatchPublished, CheckedPublishError> {
+        if retained.len() != records.len() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "publish_batch_checked: the log retains {} of the batch's {} keys: it is \
+                     neither a new batch nor the retry of one",
+                    retained.len(),
+                    records.len()
+                ),
+            )
+            .into());
+        }
+        let Some(&first) = retained.first() else {
+            return Err(io::Error::other("publish_batch_checked: an empty retry").into());
+        };
+        let mut expected = Some(first);
+        for &offset in retained {
+            if expected != Some(offset) {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "publish_batch_checked: the batch's keys are retained, but not at \
+                     consecutive offsets in its order: it is not the retry of one batch",
+                )
+                .into());
+            }
+            expected = offset.checked_next();
+        }
+        let mut digests = Vec::with_capacity(records.len());
+        for (rec, &offset) in records.iter().zip(retained) {
+            let Some(digest) = record_digest(&rec.subject, &rec.body) else {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "publish_batch_checked: a subject over 65,535 bytes has no record digest",
+                )
+                .into());
+            };
+            digests.push(digest);
+            // A resent escalated record is flushed in full before it is answered, as
+            // `publish` does for one (`cover_resent`): the first that owes it covers the rest.
+            self.cover_resent(offset, &rec.subject, rec.producer_id, None)?;
+        }
+        Ok(BatchPublished {
+            first,
+            digests,
+            deduped: true,
+        })
     }
 
     /// The offset a consumer group resumes from: `committed_upto + 1`, or
@@ -9428,7 +9935,11 @@ impl BrokerLog {
             self.held_from = None;
             self.release_held_commits();
         }
-        self.cover_head()
+        self.cover_head()?;
+        // A log used directly keeps its checkpoint from here (`ckpt.rs`): the record is its
+        // own unit, and nothing is staged.
+        self.checkpoint_if_due();
+        Ok(())
     }
 
     /// Capture an owned view at an already PUBLISHED head. An old raw number is
@@ -10951,6 +11462,9 @@ impl BrokerLog {
             return Err(e);
         }
         self.file = Backing::from_file(c.copy.into_destination());
+        // Every byte moved: the checkpoint of the log as it was binds to nothing now.
+        ckpt::discard(&self.path);
+        self.checkpoint = ckpt::Standing::default();
         // From here the on-disk log is ALREADY compacted: the rest of the durable I/O
         // runs FIRST, and any failure POISONS the log — it refuses every further op until
         // it is reopened, and the reopen finishes the compaction from the intent.

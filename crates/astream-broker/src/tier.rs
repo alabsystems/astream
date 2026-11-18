@@ -1284,6 +1284,30 @@ impl Tier {
         }
     }
 
+    /// Record `i`'s row as it was appended (its subject, its `meta`, its broker time and where
+    /// its frame starts), read for a checkpoint (`ckpt.rs`) and counted in no tally: an open
+    /// that writes one answers its readers' counts as an open that writes none.
+    fn row(&self, i: usize) -> Option<(&str, u32, Option<u64>, u64)> {
+        let (page, j) = self.place(i)?;
+        let off = self.base.checked_add(i as u64)?;
+        let meta = *self.cols.meta.get(j)?;
+        let l = *self.cols.subject.get(j)?;
+        let id = *page.subjects.get(usize::from(l))?;
+        let at = match *self.cols.at.get(j)? {
+            WIDE => *self.wide_at.get(&off)?,
+            d => page.at0.checked_add(u64::from(d))?,
+        };
+        let bt = if meta & HAS_BT == 0 {
+            None
+        } else {
+            Some(match *self.cols.bt.get(j)? {
+                WIDE => *self.wide_bt.get(&off)?,
+                d => page.bt0?.checked_add(u64::from(d))?,
+            })
+        };
+        Some((self.subjects.name(id), meta, bt, at))
+    }
+
     /// Record `i`'s broker time.
     pub(crate) fn bt(&self, i: usize) -> Option<u64> {
         count!(self, Lookup, 1);
@@ -1740,6 +1764,7 @@ impl Tier {
             ring_bytes: 0,
             newest_at: None,
             expect,
+            costs: None,
             #[cfg(test)]
             from_head: false,
         }
@@ -1887,10 +1912,42 @@ pub(crate) struct Opening {
     /// What the open knew of the records its scan passes, which the pages and columns are
     /// allocated for.
     expect: Expect,
+    /// What every record pushed charges, oldest first, kept when a checkpoint may be written
+    /// of this fold ([`keeping_costs`](Self::keeping_costs)): the one thing of a record the
+    /// window is decided by that its page does not hold. `None` when none is kept, and once a
+    /// charge does not fit a `u32`.
+    costs: Option<Vec<u32>>,
     /// The negative control: the window kept from the HEAD (the oldest records that fit the
     /// budget) rather than the tail.
     #[cfg(test)]
     from_head: bool,
+}
+
+/// One record of a fold as a checkpoint holds it (`ckpt.rs`): what [`Opening::push`] wrote of
+/// it to the pages, and what it charged the window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct OpenRow<'a> {
+    pub(crate) subject: &'a str,
+    /// Its plaintext-frame bytes with the has-time and hidden flags, as its page holds them.
+    pub(crate) meta: u32,
+    pub(crate) bt: Option<u64>,
+    /// The byte its frame starts at.
+    pub(crate) at: u64,
+    /// Its charge ([`resident_cost`]).
+    pub(crate) cost: u32,
+}
+
+impl OpenRow<'_> {
+    /// Whether `meta` says the record carries a broker time: a row whose `bt` disagrees was
+    /// never pushed.
+    pub(crate) const fn meta_has_bt(meta: u32) -> bool {
+        meta & HAS_BT != 0
+    }
+
+    /// The plaintext-frame bytes `meta` holds.
+    pub(crate) const fn meta_bytes(meta: u32) -> u32 {
+        meta & BYTES_MASK
+    }
 }
 
 /// What an open knows, before its scan, of the records the scan passes ([`Tier::opening`]).
@@ -1986,47 +2043,129 @@ impl Opening {
     /// nothing; after any other stop the sidecar's count can be any number short, and a
     /// reservation at it would be moved, and freed, as soon as the scan passed it.
     pub(crate) fn push(&mut self, rec: BrokerRecord, bt: Option<u64>, at: u64) {
+        let meta = meta_of(&rec, bt);
+        let cost = resident_cost(&rec);
+        if !self.join(rec.seq.0, &rec.subject, meta, bt, at, cost) {
+            return;
+        }
+        if let Some(held) = self.held.as_mut() {
+            held.push(rec);
+        }
+        self.evict();
+    }
+
+    /// The record a checkpoint holds as `row` (`ckpt.rs`), offset `seq`, pushed as the fold
+    /// that wrote the checkpoint pushed it: its summary to the pages, its charge to the
+    /// window. Nothing of it is decoded, so the window is read again from the file when the
+    /// scan has decided it ([`finish`](Self::finish)), as after any record left it.
+    pub(crate) fn restore(&mut self, seq: u64, row: OpenRow<'_>) {
+        self.held = None;
+        let cost = row.cost as usize;
+        if self.join(seq, row.subject, row.meta, row.bt, row.at, cost) {
+            self.evict();
+        }
+    }
+
+    /// The summary and the charge of the record at offset `seq` joined to the pages and the
+    /// window, for [`push`](Self::push) and [`restore`](Self::restore) alike; `false` under
+    /// the negative control that keeps its window from the head, which lets nothing leave it.
+    fn join(
+        &mut self,
+        seq: u64,
+        subject: &str,
+        meta: u32,
+        bt: Option<u64>,
+        at: u64,
+        cost: usize,
+    ) -> bool {
         #[cfg(test)]
         let had = self.tier.cols.capacity();
         self.make_room(at);
         let t = &mut self.tier;
         if t.len == 0 {
-            t.base = rec.seq.0;
+            t.base = seq;
         }
-        let meta = meta_of(&rec, bt);
-        t.append(&rec.subject, meta, bt, at);
+        t.append(subject, meta, bt, at);
         #[cfg(test)]
         if had > 0 && t.cols.capacity() != had {
             MOVED.with(|m| m.borrow_mut().push(had));
         }
         self.newest_at = Some(at);
-        let cost = resident_cost(&rec);
+        match (self.costs.as_mut(), u32::try_from(cost)) {
+            (Some(costs), Ok(c)) => costs.push(c),
+            (Some(_), Err(_)) => self.costs = None,
+            (None, _) => {}
+        }
         #[cfg(test)]
         if self.from_head {
             if self.ring.is_empty() || self.ring_bytes.saturating_add(cost) <= t.budget {
-                t.shadow
-                    .push_warm(rec.seq.0, &rec.subject, meta, bt, at, cost);
+                t.shadow.push_warm(seq, subject, meta, bt, at, cost);
                 self.ring_bytes = self.ring_bytes.saturating_add(cost);
                 self.ring.push_back((at, cost));
             } else {
-                t.shadow.push_cold(rec.seq.0, &rec.subject, meta, bt, at);
+                t.shadow.push_cold(seq, subject, meta, bt, at);
             }
-            return;
+            return false;
         }
         #[cfg(test)]
-        t.shadow.push(rec.seq.0, &rec.subject, meta, bt, at, cost);
+        t.shadow.push(seq, subject, meta, bt, at, cost);
         self.ring_bytes = self.ring_bytes.saturating_add(cost);
         self.ring.push_back((at, cost));
-        if let Some(held) = self.held.as_mut() {
-            held.push(rec);
-        }
-        while self.ring_bytes > t.budget && self.ring.len() > 1 {
+        true
+    }
+
+    /// Let the oldest records of the window go while it is over its budget (the newest always
+    /// stays), and with the first to go every record held decoded.
+    fn evict(&mut self) {
+        while self.ring_bytes > self.tier.budget && self.ring.len() > 1 {
             let Some((_, old)) = self.ring.pop_front() else {
                 break;
             };
             self.ring_bytes = self.ring_bytes.saturating_sub(old);
             self.held = None;
         }
+    }
+
+    /// Keep what every record charges ([`rows`](Self::rows)): a checkpoint may be written of
+    /// this fold.
+    pub(crate) fn keeping_costs(mut self) -> Opening {
+        self.costs = Some(Vec::new());
+        self
+    }
+
+    /// Room for `records` records in all, reserved at once: a checkpoint's count.
+    pub(crate) fn reserve(&mut self, records: usize) {
+        self.tier.reserve_for(records);
+        if let Some(costs) = self.costs.as_mut() {
+            if records <= 16_777_216 {
+                costs.reserve_exact(records.saturating_sub(costs.len()));
+            }
+        }
+    }
+
+    /// Every record pushed, oldest first, as a checkpoint holds it ([`OpenRow`]) and as
+    /// [`restore`](Self::restore) takes it back; `None` unless the fold kept its charges
+    /// ([`keeping_costs`](Self::keeping_costs)) for every one of them.
+    pub(crate) fn rows(&self) -> Option<impl Iterator<Item = Option<OpenRow<'_>>>> {
+        let costs = self.costs.as_ref()?;
+        if costs.len() != self.tier.len {
+            return None;
+        }
+        Some(costs.iter().enumerate().map(|(i, &cost)| {
+            let (subject, meta, bt, at) = self.tier.row(i)?;
+            Some(OpenRow {
+                subject,
+                meta,
+                bt,
+                at,
+                cost,
+            })
+        }))
+    }
+
+    /// Where record `i` pushed starts, read without a lookup the tally counts.
+    pub(crate) fn at(&self, i: usize) -> Option<u64> {
+        self.tier.row(i).map(|(_, _, _, at)| at)
     }
 
     /// Before the record whose frame starts at byte `at` joins, the reservation [`push`]
