@@ -10,12 +10,15 @@ pub(crate) struct Scratch(PathBuf);
 impl Scratch {
     pub(crate) fn new(tag: &str) -> Self {
         static NEXT: AtomicU64 = AtomicU64::new(0);
-        let mut builder = std::fs::DirBuilder::new();
         #[cfg(unix)]
-        {
+        let builder = {
             use std::os::unix::fs::DirBuilderExt;
+            let mut builder = std::fs::DirBuilder::new();
             builder.mode(0o700);
-        }
+            builder
+        };
+        #[cfg(not(unix))]
+        let builder = std::fs::DirBuilder::new();
         // Name collisions allocate another name; no preexisting entry is adopted or removed.
         for _ in 0..1024 {
             let n = NEXT.fetch_add(1, Ordering::Relaxed);

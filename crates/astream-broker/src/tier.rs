@@ -1390,7 +1390,7 @@ impl Tier {
     }
 
     /// Iterate the resident records (test and accounting helper).
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn hot_iter(&self) -> impl Iterator<Item = &Arc<BrokerRecord>> {
         self.hot.iter()
     }

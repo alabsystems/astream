@@ -132,6 +132,13 @@ fn rules(
 
 /// One log in its own scratch directory, plaintext or sealed under anti-rollback.
 struct Fx {
+    #[cfg_attr(
+        not(unix),
+        expect(
+            dead_code,
+            reason = "held for its drop, which removes the folder; read by dir(), whose callers are Unix's"
+        )
+    )]
     root: Scratch,
     path: PathBuf,
     sealed: bool,
@@ -172,6 +179,7 @@ impl Fx {
         self.try_open().unwrap()
     }
 
+    #[cfg(unix)]
     fn dir(&self) -> &Path {
         self.root.path()
     }

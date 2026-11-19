@@ -153,7 +153,7 @@ impl Locked {
 
 impl Drop for Locked {
     fn drop(&mut self) {
-        let _ = self.0.unlock();
+        let _ = astream_sys::guard::unlock(&self.0);
     }
 }
 

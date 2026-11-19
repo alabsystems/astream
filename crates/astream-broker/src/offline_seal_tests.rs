@@ -706,11 +706,15 @@ fn a_finished_switch_hands_back_the_sealed_log_locked() {
     assert!(fx.leftovers().is_empty(), "{:?}", fx.leftovers());
     let other = std::fs::File::open(&fx.path).unwrap();
     assert!(
-        matches!(other.try_lock(), Err(std::fs::TryLockError::WouldBlock)),
+        matches!(
+            astream_sys::guard::try_lock(&other),
+            Err(std::fs::TryLockError::WouldBlock)
+        ),
         "the name was free between the switch and the open's hold on the sealed log"
     );
     drop(held);
-    other.try_lock().unwrap();
+    astream_sys::guard::try_lock(&other).unwrap();
+    astream_sys::guard::unlock(&other).unwrap();
 }
 
 /// A sealed log with one record and a `.held` and no `.state`, the store's first frame resealed

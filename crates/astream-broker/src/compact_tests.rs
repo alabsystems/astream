@@ -643,14 +643,12 @@ fn the_compactions_files_are_never_readable_more_widely_than_the_log() {
     }
 }
 
-/// THE COPY READS THROUGH THE LOG'S OWN DESCRIPTOR, never a second open of its path. On
-/// Windows the open's whole-file exclusive lock (`LockFileEx` through the log's handle,
-/// `lock_exclusive`) denies reads through any other handle of the file, this process's
-/// included, so a copy read through a second open would fail every compaction there and the
-/// log would never shrink. The Unix stand-in for that lock: once the log is open, its path is
-/// made write-only (0o200), which the open's own descriptor reads past and a second open for
-/// reading does not. The carrying compaction still cuts, and the log reopens (every file made
-/// readable again first) as the uninterrupted compaction leaves it.
+/// THE COPY READS THROUGH THE LOG'S OWN DESCRIPTOR, never a second open of its path, which
+/// could fail where the descriptor already holds the log. The stand-in for such a failure:
+/// once the log is open, its path is made write-only (0o200), which the open's own
+/// descriptor reads past and a second open for reading does not. The carrying compaction
+/// still cuts, and the log reopens (every file made readable again first) as the
+/// uninterrupted compaction leaves it.
 #[cfg(unix)]
 #[test]
 fn the_copy_reads_through_the_logs_own_descriptor() {

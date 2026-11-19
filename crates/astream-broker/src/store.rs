@@ -4359,10 +4359,14 @@ pub(crate) fn subject_bound_msg(producer_id: u64) -> String {
 /// advisory locks is tolerated (the lock is a guard, not the durability mechanism).
 /// The OS releases the lock when the process dies, so a crashed broker never leaves a
 /// stale lock behind (unlike a lock FILE would).
-// `File::try_lock` / `unlock` are std-stable since 1.89, the workspace's declared
-// `rust-version`; the toolchain itself is Trust (rust-toolchain.toml).
+///
+/// The lock is [`astream_sys::guard`]'s: `flock(2)` on Unix, and on Windows, where a lock
+/// is mandatory and refuses another handle's read of every byte it covers, one byte past
+/// any length a log reaches, so a reader beside the open (a second open of the path, this
+/// process's or another's) reads every byte of the log on every OS. It is let go through
+/// [`astream_sys::guard::unlock`], never `File::unlock`, which on Windows names another range.
 fn lock_exclusive(file: &File, path: &Path) -> io::Result<()> {
-    match file.try_lock() {
+    match astream_sys::guard::try_lock(file) {
         Ok(()) => Ok(()),
         Err(std::fs::TryLockError::WouldBlock) => Err(io::Error::new(
             io::ErrorKind::AlreadyExists,
@@ -4783,7 +4787,7 @@ pub(crate) fn open_log_file(
     match astream_sys::file_matches_path(&file, path) {
         Ok(true) => {}
         result => {
-            let _ = file.unlock();
+            let _ = astream_sys::guard::unlock(&file);
             return Err(result.err().unwrap_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::AlreadyExists,
@@ -4796,7 +4800,7 @@ pub(crate) fn open_log_file(
     // (or failed) before its directory fsync, and a record acked into a file whose
     // entry is not durable can vanish with it on a power loss.
     if let Err(e) = sync_dir(path) {
-        let _ = file.unlock();
+        let _ = astream_sys::guard::unlock(&file);
         return Err(e);
     }
     Ok((file, created))
@@ -10718,7 +10722,7 @@ impl BrokerLog {
             .store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    #[cfg(all(test, unix))]
+    #[cfg(test)]
     pub(crate) fn frame_at_for_test(&self, idx: usize) -> Option<u64> {
         self.tier.at(idx)
     }
@@ -11791,7 +11795,7 @@ impl BrokerLog {
     /// How many retained records a handle OUTSIDE the log still shares: copies a
     /// reader took and has not yet delivered and dropped. For tests of how much a
     /// reader copies out of the log at once.
-    #[cfg(test)]
+    #[cfg(all(test, unix))]
     pub(crate) fn shared_records(&self) -> usize {
         self.tier
             .hot_iter()
@@ -12344,10 +12348,8 @@ pub(crate) fn scan_from(
 #[cfg(test)]
 mod tests {
     /// `bytes` reads the log through its own descriptor, never through a second open of its
-    /// path: on Windows that open succeeds and the open's whole-file exclusive lock
-    /// (`LockFileEx`, `lock_exclusive`) refuses every read through it, this process's own
-    /// second handle included, so `bytes` would read nothing there. The Unix stand-in for
-    /// that lock: once the log is open, its path is made write-only (0o200), which the
+    /// path, which could fail where the descriptor already holds the log. The stand-in for
+    /// such a failure: once the log is open, its path is made write-only (0o200), which the
     /// open's own descriptor reads past and a second open for reading does not.
     #[cfg(unix)]
     #[test]
@@ -12975,6 +12977,33 @@ mod tests {
         let third = BrokerLog::open(&path).unwrap();
         drop(third);
         drop(again);
+    }
+
+    /// A READER BESIDE AN OPEN LOG READS EVERY BYTE: the open's lock keeps a second open out
+    /// and no reader, on every OS. On Windows, where a lock is mandatory and refuses another
+    /// handle's read of every byte it covers, it covers one byte past any log's end
+    /// (`astream_sys::guard`), so a second open of the path, this process's, reads what the
+    /// log's own descriptor holds, before and after an append, while the log stays open.
+    #[test]
+    fn a_reader_beside_an_open_log_reads_every_byte() {
+        let (_tmp, path) = tmp("beside");
+        let _ = std::fs::remove_file(&path);
+        let mut log = BrokerLog::open(&path).unwrap();
+        for i in 1..=5u64 {
+            log.publish(1, i, "/a/s/x".into(), format!("b{i}").into_bytes())
+                .unwrap();
+            let beside = std::fs::read(&path).expect("a read beside the open log");
+            assert_eq!(beside.len() as u64, log.durable_len());
+            assert_eq!(
+                beside,
+                log.bytes(),
+                "the bytes the log's own descriptor holds"
+            );
+        }
+        let err = BrokerLog::open(&path)
+            .err()
+            .expect("a second open is still refused");
+        assert_eq!(err.kind(), io::ErrorKind::AlreadyExists, "{err}");
     }
 
     /// The batch a `commit_begin` hands out: a test that stages something and wants its

@@ -14035,6 +14035,7 @@ mod tests {
         assert!(identities.is_empty() && principals.is_empty());
     }
 
+    #[cfg(unix)]
     #[test]
     fn monotone_clock_and_revocation_file_enforcement() {
         let (_tmp, b, mut h, _sock) = filled("revfile", 1);
@@ -15999,6 +16000,7 @@ mod tests {
     }
 
     /// Spin until `cond` holds — a one-minute HANG DETECTOR, never a latency budget.
+    #[cfg(unix)]
     fn until_a_minute(what: &str, mut cond: impl FnMut() -> bool) {
         let deadline = Instant::now() + Duration::from_secs(60);
         while !cond() {

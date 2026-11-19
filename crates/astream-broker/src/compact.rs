@@ -844,10 +844,9 @@ fn cut_error() -> io::Error {
 
 /// THE KEPT-SUFFIX COPY: `<log>.kept`, filled in bounded chunks by POSITIONAL reads
 /// through the log's own descriptor, shared (an `Arc`, as the flush handles share it),
-/// never a second open of its path: on Windows the open's whole-file exclusive lock
-/// (`LockFileEx` through that descriptor, `lock_exclusive`) denies reads through any other
-/// handle of the file, this process's included, so a copy read through one would fail every
-/// compaction there. It borrows nothing of the log, so the broker runs [`run`](Self::run)
+/// never a second open of its path, which a rename at the name could make another file's
+/// and which could fail where the descriptor is already held. It borrows nothing of the
+/// log, so the broker runs [`run`](Self::run)
 /// with no lock held while the writer appends: every append is written by position at the
 /// log's end (`storage::write_all_at`), so a read that moves the file cursor, as Windows'
 /// `seek_read` does, moves nothing an append depends on.
@@ -1074,7 +1073,7 @@ impl KeptCopy {
     pub(crate) fn abandon(self) {
         let kept = self.kept;
         drop(self.src);
-        let _ = self.dst.unlock();
+        let _ = astream_sys::guard::unlock(&self.dst);
         drop(self.dst);
         let _ = remove_file_path(&kept);
     }

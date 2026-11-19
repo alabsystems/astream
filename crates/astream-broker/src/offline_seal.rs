@@ -286,7 +286,7 @@ pub(super) fn settle(path: &Path) -> io::Result<Option<File>> {
         let replaced = complete(path, &m, &mut |_| Ok(()));
         if !matches!(replaced, Ok(true)) {
             if let Some(f) = &sealed {
-                let _ = f.unlock();
+                let _ = astream_sys::guard::unlock(f);
             }
         }
         let replaced = replaced?;

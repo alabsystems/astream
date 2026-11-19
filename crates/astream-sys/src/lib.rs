@@ -99,6 +99,12 @@
 //!   search bits set; every other path is left to the open ([`PathUndecided`]). Both
 //!   entries judge through one set of clauses, the private `owner_rule` module, which
 //!   [`kind_and_owner_of`] also holds a caller's own metadata to.
+//! - [`guard`]: the lock a file's one writer holds to keep a second one out, which
+//!   leaves every byte of the file readable beside it: `flock(2)` on the whole file on
+//!   Unix, through `std`, and on Windows, where a lock is mandatory and refuses another
+//!   handle's read of every byte it covers, the one byte at [`guard::GUARD_BYTE`] (2^62),
+//!   which no file reaches. astream-broker's log lock is this guard, so a reader opens a
+//!   log a broker holds and reads it on every OS.
 //!
 //! ## The cordon
 //!
@@ -119,6 +125,8 @@
 //! [`open_nonblocking`] and [`open_nonblocking_rw`] pass to safe `std` live there too.
 //! `file_identity` (`cfg(windows)`) reads the kernel's volume and file index for
 //! [`file_matches_path`], so a path replacement is never judged by size or time.
+//! `guard_win` (`cfg(windows)`) calls `LockFileEx`, `UnlockFileEx` and
+//! `GetOverlappedResult` behind [`guard`]'s three functions.
 //! Nothing else here may use `unsafe` — the compiler refuses it — and no errno or raw
 //! pointer leaves those modules: every call returns `io::Result` or an owned value.
 //! `astream-broker` stays `forbid(unsafe_code)` and reaches the OS through this
@@ -257,6 +265,8 @@ mod owner_rule;
 #[cfg(windows)]
 #[allow(unsafe_code)]
 mod file_identity;
+
+pub mod guard;
 
 /// Whether the open descriptor and the path currently name the same file.
 /// Follows the path's final symlink, just as a normal file open does.

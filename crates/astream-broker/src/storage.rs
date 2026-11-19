@@ -265,7 +265,7 @@ impl Backing {
     pub(crate) fn unlock(&self) {
         match self {
             Backing::Os(f) => {
-                let _ = f.unlock();
+                let _ = astream_sys::guard::unlock(f);
             }
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(_) => {}
@@ -447,17 +447,15 @@ fn read_once_at(file: &File, buf: &mut [u8], start: u64) -> io::Result<usize> {
 ///
 /// - AN APPEND-ONLY HANDLE (`FILE_APPEND_DATA` without `FILE_WRITE_DATA` on Windows;
 ///   `O_APPEND` on Unix) is a second open of the file: it can fail where taking the shared
-///   descriptor cannot ([`Backing::flush_handle`] says why that matters), retention's
-///   rewrite replaces the file under it, and on Windows the whole-file exclusive lock the
-///   open takes (`LockFileEx` through the log's own handle, `lock_exclusive`) denies reads
-///   and writes through any other handle of the file, this process's included. And it
+///   descriptor cannot ([`Backing::flush_handle`] says why that matters), and retention's
+///   rewrite replaces the file under it. And it
 ///   writes at the FILE's end, not the log's: after a write that failed partway, the next
 ///   append lands past the torn bytes unless the rollback's truncate took, and on Windows
 ///   that truncate would have to go through the other handle, since one without
 ///   `FILE_WRITE_DATA` may not shorten the file (an `O_APPEND` descriptor on Unix may).
-/// - A SEPARATE READ HANDLE for the cold reads and the scan is the same second open, with
-///   the same lock in the way, and must be replaced in step with every retention rewrite.
-///   That lock is why the live log is read through its own descriptor, and by position
+/// - A SEPARATE READ HANDLE for the cold reads and the scan is the same second open, and
+///   must be replaced in step with every retention rewrite. So the live log is read
+///   through its own descriptor, and by position
 ///   wherever a read can overlap an append: the cold reads, the open's scan, retention's
 ///   copy (`compact::KeptCopy`, which reads with no lock held while the writer appends,
 ///   safe because no append depends on the cursor) and the inspection read
@@ -469,10 +467,10 @@ fn read_once_at(file: &File, buf: &mut [u8], start: u64) -> io::Result<usize> {
 ///   holds. The other is an offline seal's check of the log it pins
 ///   (`offline_seal::changed_since`, which `settle` in the open and `pending` in
 ///   `check_open` run under their lock and before any append): it reads the newest frame
-///   through a second open of the path, which on Windows succeeds and whose read the lock
-///   refuses, so the open or the check fails there. Only a seal's marker and staged log
-///   beside the log reach it, and the seal that writes them is Unix-only (it reads the
-///   plaintext log through its name too, where the lock is advisory and refuses no read).
+///   through a second open of the path, whose read the lock leaves alone on every OS (on
+///   Windows it locks one byte past any log's end, `astream_sys::guard`). Only a seal's
+///   marker and staged log beside the log reach it, and the seal that writes them is
+///   Unix-only.
 /// - A CURSOR RESTORE (seek back to the end after every read, under the lock) misses the
 ///   batch written OUTSIDE the lock: the batch's write can run between a reader's read
 ///   and its restore, at the cursor the read left, and a restore that runs while the

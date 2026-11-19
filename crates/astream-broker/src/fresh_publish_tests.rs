@@ -6,6 +6,7 @@
 
 use super::*;
 use crate::test_scratch::Scratch;
+#[cfg(unix)]
 use crate::{Client, FreshPublish};
 
 const HANG: Duration = Duration::from_secs(60);
