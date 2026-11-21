@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Architecture-pinned `seccomp-bpf` selective syscall pre-filter (`O(intercepted)` tracer cost)
-//! (`docs/ROADMAP.md` §"Effects, foreign-process sub-seeds" item 1;
+//! (foreign-process replay: the `seccomp-bpf` pre-filter;
 //! `Astream.Host.TlaSeccompBpfSyscallFilter`).
 //!
 //! Models a `seccomp-bpf` filter installed prior to `execve` that:
@@ -192,7 +192,7 @@ mod tests {
         assert_eq!(f.traced_stops(), 0);
         assert_eq!(f.total_syscalls(), 100);
 
-        // Intercepted trio from the roadmap seed: clock_gettime, getrandom, read.
+        // The intercepted trio: clock_gettime, getrandom, read.
         assert_eq!(
             f.evaluate(AUDIT_ARCH_X86_64_TAG, x86_64_nr::CLOCK_GETTIME),
             SeccompFilterVerdict::TraceIntercepted {

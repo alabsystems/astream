@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! `seccomp-bpf` 5-syscall `SECCOMP_RET_TRACE` pre-filter classifier (`docs/ROADMAP.md` §4:
-//! *"a seccomp-bpf pre-filter that `SECCOMP_RET_TRACE`s only the intercepted set
-//! (`clock_gettime`, `getrandom`, `openat`, `read`, `close`), so the tracer costs
-//! O(intercepted) rather than O(all) syscalls"*, `Astream.SecReplay.TlaSeccompFiveMask`).
+//! `seccomp-bpf` 5-syscall `SECCOMP_RET_TRACE` pre-filter classifier: the filter traces only the
+//! intercepted set (`clock_gettime`, `getrandom`, `openat`, `read`, `close`), so the tracer costs
+//! O(intercepted) rather than O(all) syscalls
+//! (`Astream.SecReplay.TlaSeccompFiveMask`).
 
 #![allow(
     clippy::manual_map,

@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Short-lived Proof-of-Authority (`PoA`) offline Macaroon capability attenuation ceiling
-//! (`ROADMAP.md` lines 12-14, `Astream.CertAuth.TlaPoaDelegation`).
+//! (`Astream.CertAuth.TlaPoaDelegation`).
 
 use astream_cap::{attenuate_offline, can_attenuate, Capability, Grant};
 

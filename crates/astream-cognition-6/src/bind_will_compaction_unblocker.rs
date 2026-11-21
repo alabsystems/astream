@@ -4,7 +4,7 @@
 //! `/a/bind` & `/a/will` live-pin re-anchoring planner for `BrokerLog::retain_before`
 //! (`Astream.Broker.TlaBindWillCompactionUnblocker`).
 //!
-//! Resolves the `ROADMAP.md` retention-compaction blocker: long-lived `aterm` session `/a/bind`
+//! Resolves a retention-compaction blocker: long-lived `aterm` session `/a/bind`
 //! leases and `/a/will` registrations sit near offset `0` and pin the entire log against
 //! `retain_before(horizon)`. When an active pin blocks `horizon` by more than `reanchor_span`,
 //! this planner triggers a deterministic tail re-anchor to `log_hw` and advances `compacted_base`

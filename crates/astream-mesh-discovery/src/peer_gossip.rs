@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! SWIM-style incarnation peer membership protocol and suspect-to-dead promotion
-//! (`ROADMAP.md` line 124, `Astream.Mesh.TlaPeerGossip`).
+//! (`Astream.Mesh.TlaPeerGossip`).
 //!
 //! Resolves concurrent gossip updates deterministically without synchronized wall clocks:
 //! - Higher `incarnation` strictly wins (`gossip_inc_advance`).

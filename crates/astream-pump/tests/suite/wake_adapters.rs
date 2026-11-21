@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Evidence for `pump.wake-adapters`: `DESIGN-drive-pipe.md` §5 step 4 (`docs/ROADMAP.md` §5).
+//! Evidence for `pump.wake-adapters`: `DESIGN-drive-pipe.md` §5 step 4.
 //! Proves broker task-queue wake posting & non-blocking top-of-turn draining (`WakeTaskQueue`,
 //! `drain_wake_tasks`, `aspump --task-subject`), Claude Code (`Notification` / `Stop`) and
 //! Codex (`turn.wake`) JSON hook delivery over Unix & TCP sockets (`aspump --hook-unix`,

@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Sealed-stream partial-record cut poisoning & whole-record short-write accounting
-//! (`docs/AUDIT-2026-09.md` line 41; `Astream.Aead.TlaSealedSendCutPoisonGuard`).
+//! (`Astream.Aead.TlaSealedSendCutPoisonGuard`).
 //!
-//! Enforces the two AEAD stream-integrity invariants from the September 2026 audit:
+//! Enforces two AEAD stream-integrity invariants:
 //! 1. If one or more complete AEAD frames were already flushed to the underlying socket
 //!    before an I/O interruption at a frame boundary (`written_in_frame == 0`), `write`
 //!    MUST report the short plaintext byte count (`ShortWholeRecordFlush`) so a caller retry

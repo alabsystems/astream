@@ -835,6 +835,7 @@ fn the_open_judges_an_intent_by_the_logs_first_frame() {
         old: id(1),
         new: Some(id(2)),
         carries_state: true,
+        unlinks: false,
     };
     assert_eq!(judge(&keeps, Some(id(2))), Verdict::Finish);
     assert_eq!(judge(&keeps, Some(id(1))), Verdict::Discard);
@@ -861,6 +862,7 @@ fn an_intent_round_trips_and_an_older_builds_copy_is_none() {
         old: id(4),
         new: None,
         carries_state: false,
+        unlinks: false,
     };
     assert_eq!(Intent::decode(&intent.encode()), Some(intent));
     let backwards = Intent {
@@ -962,6 +964,7 @@ fn a_sealed_intent_reads_only_under_its_key() {
         old: id(5),
         new: Some(id(6)),
         carries_state: true,
+        unlinks: false,
     };
     let k11 = crate::store::AtRestRef::v1(&[0x11; 32]);
     let k12 = crate::store::AtRestRef::v1(&[0x12; 32]);
@@ -995,6 +998,7 @@ fn an_intent_that_names_neither_side_refuses_the_open() {
             old: id(8),
             new: Some(id(9)),
             carries_state: false,
+            unlinks: false,
         },
         &perms_of(&fx.path),
     )

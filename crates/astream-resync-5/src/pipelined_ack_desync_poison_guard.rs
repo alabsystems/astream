@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Pipelined `Ack` desync poisoning & bounded peer `Fetch`/`Last` row cap
-//! (`docs/AUDIT-2026-09.md` line 46; `Astream.Wire.TlaPipelinedAckDesyncPoisonGuard`).
+//! (`Astream.Wire.TlaPipelinedAckDesyncPoisonGuard`).
 //!
-//! Prevents both client-protocol hazards identified in `AUDIT-2026-09.md` line 46:
+//! Prevents both client-protocol hazards:
 //! 1. If `publish_pipelined` aborts mid-batch with unread in-flight acks (`unread_inflight_acks > 0`),
 //!    the request/reply stream is irreversibly marked `desynced` so a subsequent `publish` NEVER
 //!    consumes an earlier record's stale `Ack(offset)` as its own!

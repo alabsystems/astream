@@ -3,7 +3,7 @@
 
 //! Encrypted and mutually-authenticated wire listener policy and session upgrade state machine
 //! for [`crate::server::KafkaServer`] and [`crate::server::KafkaClient`]
-//! (`ROADMAP.md` "Kafka SASL/TLS listeners").
+//! (Kafka SASL/TLS listeners).
 //!
 //! Composes wire encryption levels (`Plain`, `Sealed` PSK, forward-secret X25519 `Handshake`,
 //! and mutual Ed25519 `Identity` signed-DH) with `astream-kafka`'s SASL authentication

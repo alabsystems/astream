@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! External-authority (`SSH agent` / `OIDC`) certificate binder & dual-overlap key rotator
-//! (`docs/ROADMAP.md` §"Transport and identity"; `Astream.Cap.TlaSshOidcAuthorityRotator`).
+//! (`Astream.Cap.TlaSshOidcAuthorityRotator`).
 //!
 //! Binds short-lived workload/operator certificates issued by an external authority (SSH CA /
 //! ssh-agent or OIDC workload identity issuer) to `astream` capability principals with zero static

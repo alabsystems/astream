@@ -1,9 +1,10 @@
 //! `capture` — the live-capture CLI: record ONE real Anthropic model completion
 //! and replay the session assembled around it through the in-tree substrate.
 //!
-//! This is the master seed's **non-hermetic** step, so it is a runnable TOOL,
-//! never a green evidence claim (the hermetic parse + replay + fork half is the
-//! green claim `cognition.live-bridge.parse-and-replay`). It captures over one of
+//! This is the **non-hermetic** record pass of `astream_agent::unified`'s
+//! session, so it is a runnable TOOL, never a green evidence claim (the
+//! hermetic parse + replay + fork half is the green claim
+//! `cognition.live-bridge.parse-and-replay`). It captures over one of
 //! two real, `#[ignore]`-gated paths:
 //!
 //! * `ANTHROPIC_API_KEY` set → `capture_live`: a keyed `curl` to the Messages API
@@ -543,7 +544,7 @@ fn main() -> ExitCode {
         Err(e) => {
             eprintln!("capture failed: {e}");
             eprintln!(
-                "(the live capture is the master seed's non-hermetic step: it needs \
+                "(the live capture is the non-hermetic record pass: it needs \
                  either ANTHROPIC_API_KEY or an authenticated `claude` CLI)"
             );
             return ExitCode::FAILURE;

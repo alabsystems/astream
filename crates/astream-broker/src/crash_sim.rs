@@ -110,6 +110,11 @@ use crate::brecord::BrokerRecord;
 use crate::logid::{self, Lineage, Prior};
 use crate::sim_device::{images, Device, Rng, Sim, SimDevice};
 use crate::storage::Dir;
+/// The power-loss law over a segmented log's roll and cut (`segments.rs`, aterm LT-A8).
+#[cfg(all(unix, feature = "retention"))]
+#[path = "crash_sim_segments.rs"]
+mod segments;
+
 #[cfg(doc)]
 use crate::store::Committed;
 use crate::store::{

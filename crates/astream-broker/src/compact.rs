@@ -43,6 +43,12 @@
 //! Openers recheck their locked descriptor against the current pathname before
 //! reading sidecars, refusing an old inode detached while they acquired its lock.
 //!
+//! A SEGMENTED log's cut (`segments.rs`) keeps this protocol with no copy: its intent is of
+//! the unlinking kind, its switch is step 6 (the base, moved before the state is installed),
+//! and the segments below the new base are unlinked ([`Step::Unlink`]) before the intent is
+//! removed. An open judges it by the first frame of the segment at the base it reads, so
+//! the same judgement below holds.
+//!
 //! # Recovery
 //!
 //! An open ([`recover`]) that finds an intent compares its two identities with the log's
@@ -99,6 +105,11 @@ const INTENT_FILE_CAP: u64 = 4096;
 /// The intent's own format: magic and version.
 const INTENT_MAGIC: &[u8; 5] = b"ASCI\x01";
 
+/// The magic of an intent of the UNLINKING kind, a segmented log's cut (`segments.rs`): the
+/// same fields, and the switch is the base, not a rename. A build that predates it reads it as
+/// no intent of its own, and refuses the log's anchor anyway.
+const UNLINK_MAGIC: &[u8; 5] = b"ASCI\x02";
+
 /// Domain-separating AAD for sealing `<log>.compact` under the log's at-rest key.
 #[cfg(feature = "at-rest")]
 const INTENT_AAD: &[u8] = b"astream-compact-intent-v1";
@@ -128,6 +139,9 @@ pub(crate) enum Step {
     StateInstalled,
     Base,
     Watermark,
+    /// A segmented log's cut only (`segments.rs`): the segments below the new base unlinked
+    /// and the directory flushed.
+    Unlink,
     IntentRemoved,
 }
 
@@ -183,6 +197,9 @@ pub(crate) struct Intent {
     pub(crate) new: Option<FrameId>,
     /// Whether a staged `<log>.state.next` belongs to this compaction.
     pub(crate) carries_state: bool,
+    /// Whether it is a segmented log's cut, which unlinks the segments below the new base
+    /// once the base names it (`segments.rs`), rather than a copy renamed over the log.
+    pub(crate) unlinks: bool,
 }
 
 /// The intent's encoded length: magic, two bases, the old identity, a flag and the new
@@ -223,7 +240,11 @@ fn take_flag(b: &[u8], pos: &mut usize) -> Option<bool> {
 impl Intent {
     pub(crate) fn encode(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(INTENT_LEN);
-        out.extend_from_slice(INTENT_MAGIC);
+        out.extend_from_slice(if self.unlinks {
+            UNLINK_MAGIC
+        } else {
+            INTENT_MAGIC
+        });
         put_u64(&mut out, self.old_base);
         put_u64(&mut out, self.new_base);
         out.extend_from_slice(&self.old.fp);
@@ -244,9 +265,17 @@ impl Intent {
 
     /// Decode an intent; `None` on anything that is not exactly one.
     pub(crate) fn decode(b: &[u8]) -> Option<Intent> {
-        if b.len() != INTENT_LEN || b.get(..INTENT_MAGIC.len())? != INTENT_MAGIC {
+        if b.len() != INTENT_LEN {
             return None;
         }
+        let magic = b.get(..INTENT_MAGIC.len())?;
+        let unlinks = if magic == INTENT_MAGIC {
+            false
+        } else if magic == UNLINK_MAGIC {
+            true
+        } else {
+            return None;
+        };
         let mut pos = INTENT_MAGIC.len();
         let old_base = take_u64(b, &mut pos)?;
         let new_base = take_u64(b, &mut pos)?;
@@ -269,6 +298,7 @@ impl Intent {
             old,
             new: if has_new { Some(new) } else { None },
             carries_state,
+            unlinks,
         })
     }
 }
@@ -497,9 +527,14 @@ pub(crate) fn recover(
             clear_leftovers(log);
             eprintln!(
                 "astream-broker: {}: discarded the compaction to base {} that a crash \
-                 interrupted before it replaced the log; the log is as it was",
+                 interrupted before it {}; the log is as it was",
                 log.display(),
-                intent.new_base
+                intent.new_base,
+                if intent.unlinks {
+                    "moved the base"
+                } else {
+                    "replaced the log"
+                }
             );
             Ok(())
         }
@@ -610,6 +645,9 @@ fn finish(
     }
     write_base(log, intent.new_base)?;
     reidentify(log, key, intent, anti_rollback)?;
+    if intent.unlinks {
+        crate::segments::unlink_below(log, intent.new_base)?;
+    }
     remove_intent(log)?;
     clear_leftovers(log);
     // The checkpoint of the log as it was before the switch binds to nothing now.
@@ -842,6 +880,120 @@ fn cut_error() -> io::Error {
     )
 }
 
+/// WHAT A CUT DOES WITH THE RECORDS IT KEEPS: a one-file log copies them to `<log>.kept`
+/// ([`KeptCopy`]); a segmented log keeps the segments they are in and unlinks the ones below
+/// the cut ([`Unlinked`], `segments.rs`), copying nothing.
+pub(crate) enum Cut {
+    Copy(KeptCopy),
+    Unlink(Unlinked),
+}
+
+/// A segmented log's cut: where its kept segments start in the log's byte range and the log's
+/// first frame, read at its begin, and the first kept frame, read at its finish (between the
+/// two the writer may append the first kept record, when the cut keeps the active segment
+/// empty). Nothing to run.
+pub(crate) struct Unlinked {
+    pub(crate) cut: u64,
+    pub(crate) old: FrameId,
+    pub(crate) first: Option<FrameId>,
+    pub(crate) seam: Seam,
+}
+
+impl Cut {
+    /// The unlocked half's copy: nothing for an unlinking cut.
+    pub(crate) fn run(&mut self) -> io::Result<()> {
+        match self {
+            Cut::Copy(k) => k.run(),
+            Cut::Unlink(_) => Ok(()),
+        }
+    }
+
+    /// Whether it is a segmented log's cut.
+    pub(crate) const fn unlinks(&self) -> bool {
+        matches!(self, Cut::Unlink(_))
+    }
+
+    /// The compaction's seam.
+    pub(crate) const fn seam(&self) -> &Seam {
+        match self {
+            Cut::Copy(k) => k.seam(),
+            Cut::Unlink(u) => &u.seam,
+        }
+    }
+
+    /// How many record bytes the cut wrote: the kept suffix it copied, or none.
+    pub(crate) const fn copied_bytes(&self) -> u64 {
+        match self {
+            Cut::Copy(k) => k.copied_bytes(),
+            Cut::Unlink(_) => 0,
+        }
+    }
+
+    /// Give the cut up before its switch.
+    pub(crate) fn abandon(self) {
+        match self {
+            Cut::Copy(k) => k.abandon(),
+            Cut::Unlink(_) => {}
+        }
+    }
+
+    /// The copy's delta to `end` ([`KeptCopy::extend_to`]); nothing to copy for an unlink.
+    pub(crate) fn extend_to(&mut self, end: u64) -> io::Result<()> {
+        match self {
+            Cut::Copy(k) => k.extend_to(end),
+            Cut::Unlink(_) => Ok(()),
+        }
+    }
+
+    /// The copy's flush ([`KeptCopy::flush`]); nothing for an unlink.
+    pub(crate) fn flush(&mut self) -> io::Result<()> {
+        match self {
+            Cut::Copy(k) => k.flush(),
+            Cut::Unlink(_) => Ok(()),
+        }
+    }
+
+    /// The log's first frame.
+    pub(crate) const fn old(&self) -> Option<FrameId> {
+        match self {
+            Cut::Copy(k) => k.old(),
+            Cut::Unlink(u) => Some(u.old),
+        }
+    }
+
+    /// Where the kept records start in the log's bytes.
+    pub(crate) const fn cut(&self) -> Option<u64> {
+        match self {
+            Cut::Copy(k) => k.cut(),
+            Cut::Unlink(u) => Some(u.cut),
+        }
+    }
+
+    /// The first kept frame, or `None` when the cut keeps none.
+    pub(crate) const fn first(&self) -> Option<FrameId> {
+        match self {
+            Cut::Copy(k) => k.first(),
+            Cut::Unlink(u) => u.first,
+        }
+    }
+
+    /// A copying cut's copy and its path, which its switch renames over the log.
+    pub(crate) fn kept_copy(&self) -> Option<(&File, &Path)> {
+        match self {
+            Cut::Copy(k) => Some((k.destination(), k.kept())),
+            Cut::Unlink(_) => None,
+        }
+    }
+
+    /// A copying cut's copy, which becomes the live log.
+    pub(crate) fn into_destination(self) -> Option<File> {
+        match self {
+            Cut::Copy(k) => Some(k.into_destination()),
+            Cut::Unlink(_) => None,
+        }
+    }
+}
+
 /// THE KEPT-SUFFIX COPY: `<log>.kept`, filled in bounded chunks by POSITIONAL reads
 /// through the log's own descriptor, shared (an `Arc`, as the flush handles share it),
 /// never a second open of its path, which a rename at the name could make another file's
@@ -1032,6 +1184,14 @@ impl KeptCopy {
         self.seam.flushed(self.copied.saturating_sub(self.flushed));
         self.flushed = self.copied;
         Ok(())
+    }
+
+    /// How many record bytes the copy holds: what it wrote to `<log>.kept`.
+    pub(crate) const fn copied_bytes(&self) -> u64 {
+        match self.cut {
+            Some(cut) => self.copied.saturating_sub(cut),
+            None => 0,
+        }
     }
 
     /// The byte offset of the first kept frame (after [`run`](Self::run)).

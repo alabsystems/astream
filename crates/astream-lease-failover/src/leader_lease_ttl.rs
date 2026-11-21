@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Autonomous replica leader-lease TTL clock (`docs/ROADMAP.md` §3: *"Still open: autonomous
-//! background lease-heartbeat failover daemon"*) enforcing bounded lease durations and guard-band
-//! expiry before candidate election (`Astream.LeaseFail.TlaLeaderLeaseTtl`).
+//! Autonomous replica leader-lease TTL clock for a background lease-heartbeat failover daemon,
+//! enforcing bounded lease durations and guard-band expiry before candidate election
+//! (`Astream.LeaseFail.TlaLeaderLeaseTtl`).
 
 #![allow(
     clippy::manual_map,

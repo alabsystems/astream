@@ -4,10 +4,10 @@
 use super::*;
 
 /// A deterministic xorshift, so a failing seed reruns as it failed.
-struct Rng(u64);
+pub(super) struct Rng(pub(super) u64);
 
 impl Rng {
-    fn below(&mut self, n: u64) -> u64 {
+    pub(super) fn below(&mut self, n: u64) -> u64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
@@ -15,7 +15,7 @@ impl Rng {
     }
 }
 
-fn id(n: usize) -> Digest {
+pub(super) fn id(n: usize) -> Digest {
     let mut id = [0; 32];
     // The first byte permutes the rows, so digest order is not causal order.
     id[0] = (n * 89 % 251) as u8;
@@ -77,7 +77,7 @@ fn history(rng: &mut Rng, records: usize, forks_from: usize) -> Vec<Header> {
 }
 
 /// The past of `roots` in `full`: down-closed by construction, as a checkpoint's cut is.
-fn cut_of(full: &Index, roots: &[Digest]) -> BTreeSet<Digest> {
+pub(super) fn cut_of(full: &Index, roots: &[Digest]) -> BTreeSet<Digest> {
     let mut cut = BTreeSet::new();
     for root in roots {
         cut.insert(*root);
@@ -88,7 +88,11 @@ fn cut_of(full: &Index, roots: &[Digest]) -> BTreeSet<Digest> {
 
 /// The cut's boundary (its maximal records, and the records in it that a record above it
 /// names), each with its past as a version vector read from `full`.
-fn boundary(full: &Index, headers: &[Header], cut: &BTreeSet<Digest>) -> Vec<FloorRecord> {
+pub(super) fn boundary(
+    full: &Index,
+    headers: &[Header],
+    cut: &BTreeSet<Digest>,
+) -> Vec<FloorRecord> {
     let mut named = BTreeSet::new();
     for header in headers.iter().filter(|h| !cut.contains(&h.id)) {
         named.extend(header.parents.iter().filter(|p| cut.contains(*p)));

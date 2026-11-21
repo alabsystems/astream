@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! At-rest encrypted log Associated Authenticated Data (`AAD`) log-identity & offset binder
-//! (`AUDIT-2026-09.md`; `Astream.Aead.TlaAtRestAadLogBinder`).
+//! (`Astream.Aead.TlaAtRestAadLogBinder`).
 //!
 //! Eliminates cross-log and cross-offset ciphertext transplantation under a shared at-rest key:
 //! constructs a canonical 32-byte little-endian AAD tag `(log_id_hi, log_id_lo, lineage_epoch,

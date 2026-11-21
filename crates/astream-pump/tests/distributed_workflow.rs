@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! End-to-end multi-worker distributed workflow and DAG tests over a live TCP/Unix
-//! `astream-broker` instance (`docs/ROADMAP.md` "distributed durable execution").
+//! `astream-broker` instance.
 
 #![cfg(unix)]
 

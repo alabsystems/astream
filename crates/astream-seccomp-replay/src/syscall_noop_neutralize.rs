@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Replay-time syscall no-op neutralization gate (`docs/ROADMAP.md` §4: *"rewrite the syscall
-//! to a no-op at the seccomp stop, then inject the taped return value and buffer, so no real
-//! syscall reaches the kernel"*, `Astream.SecReplay.TlaSyscallNoopNeutralize`).
+//! Replay-time syscall no-op neutralization gate: rewrite the syscall to a no-op at the seccomp
+//! stop, then inject the taped return value and buffer, so no real syscall reaches the kernel
+//! (`Astream.SecReplay.TlaSyscallNoopNeutralize`).
 
 #![allow(
     clippy::manual_map,

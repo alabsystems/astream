@@ -371,6 +371,33 @@ impl Unconfirmed {
         (follower, fh)
     }
 
+    /// `op` again until it is not refused for want of a quorum, and what it returned
+    /// then, with the number of refusals before it. The first ship to the revived
+    /// follower is on a fresh link, which gets one ack read within
+    /// `REPLICA_IO_TIMEOUT` and no second try: a loaded host that stalls the follower
+    /// past it fails that batch's confirmation, and the link is dialed again by the
+    /// next batch. So the refusals are counted, not assumed to be none. Each one is a
+    /// batch whose ship confirmed nothing and so broadcast nothing, which
+    /// [`Self::confirmed_by_a_later_batch`] checks with the exact counts.
+    fn until_confirmed<T>(
+        &mut self,
+        mut op: impl FnMut(&mut Client) -> std::io::Result<T>,
+    ) -> (T, u64) {
+        let deadline = Instant::now() + HANG;
+        let mut refused = 0;
+        loop {
+            match op(&mut self.client) {
+                Ok(v) => return (v, refused),
+                Err(e) if is_quorum_refusal(&e) => refused += 1,
+                Err(e) => panic!("{e}"),
+            }
+            assert!(
+                Instant::now() < deadline,
+                "no ship to the revived follower confirmed"
+            );
+        }
+    }
+
     /// After the batch that confirmed `/m/x` and a fence behind it: that batch, and
     /// nothing else, broadcast, and the parked tail was resumed once and delivered
     /// `/m/x`. With the broadcast range narrowed to the batch's own appends — the Strict
@@ -398,14 +425,11 @@ fn a_retry_whose_ship_confirms_its_refused_publish_wakes_the_tails() {
     let s = Scratch::new("retry");
     let mut u = Unconfirmed::new(&s);
     let _follower = u.revive();
-    assert_eq!(
-        u.client.publish(1, 1, "/m/x", b"m").unwrap(),
-        (0, true),
-        "the retry deduplicated and was confirmed"
-    );
+    let (ack, refused) = u.until_confirmed(|c| c.publish(1, 1, "/m/x", b"m"));
+    assert_eq!(ack, (0, true), "the retry deduplicated and was confirmed");
     fence(&mut u.client);
-    // Two empty batches: the retry and the fence.
-    u.confirmed_by_a_later_batch(1, 2);
+    // Empty batches: each refused retry, the confirmed retry and the fence.
+    u.confirmed_by_a_later_batch(1, refused + 2);
 }
 
 /// A hidden-only batch can broadcast in the Replicated tier: a group commit appends
@@ -418,10 +442,16 @@ fn a_commit_whose_ship_confirms_an_earlier_publish_wakes_the_tails() {
     let s = Scratch::new("later");
     let mut u = Unconfirmed::new(&s);
     let _follower = u.revive();
-    assert_eq!(u.client.commit("g", 0).unwrap(), 1);
+    // A refused commit is still appended on the leader, a hidden record after /m/x@0.
+    let (off, refused) = u.until_confirmed(|c| c.commit("g", 0));
+    assert_eq!(
+        off,
+        1 + refused,
+        "the confirmed commit follows each refused one"
+    );
     fence(&mut u.client);
     // One empty batch: the fence.
-    u.confirmed_by_a_later_batch(2, 1);
+    u.confirmed_by_a_later_batch(2 + refused, 1);
 }
 
 /// A tail left parked past a hidden-only batch still ends at shutdown: shutdown
@@ -537,9 +567,33 @@ fn a_first_bind_wakes_no_tail() {
 /// A tail left parked past a hidden-only batch still ends at its authority's lapse:
 /// its wait is bounded by the lapse, not by a broadcast, and on waking it reads past
 /// the hidden records into the refusal.
+///
+/// The lapse is a wall-clock instant fixed before the tail exists, so an attempt shows
+/// the claim only if the tail parked and both commits were acked before it. Each
+/// attempt checks that order itself. An attempt the host lost (a loaded host can spend
+/// the whole window before the tail parks, and a tail that never parks would leave a
+/// wait for the park hanging) is redone on a fresh broker with twice the window,
+/// never passed. Five attempts span 1 s to 16 s, inside the one-minute HANG.
 #[cfg(feature = "cap")]
 #[test]
 fn a_lapse_still_ends_a_tail_parked_past_a_hidden_batch() {
+    let mut window_ms = 1_000;
+    for attempt in 1..=5 {
+        if lapse_after_two_commits(window_ms) {
+            return;
+        }
+        eprintln!("lapse attempt {attempt}: the {window_ms} ms window ran out first; doubling");
+        window_ms *= 2;
+    }
+    panic!("in five attempts up to 16 s the tail never parked past two commits before its lapse");
+}
+
+/// One attempt of [`a_lapse_still_ends_a_tail_parked_past_a_hidden_batch`] with a
+/// read capability that lapses `window_ms` from now: `false` if the lapse came before
+/// the tail parked or before the second commit's ack, so nothing was shown; otherwise
+/// every assertion of the claim, and `true`.
+#[cfg(feature = "cap")]
+fn lapse_after_two_commits(window_ms: u64) -> bool {
     use astream_broker::{broker_refusal, BrokerRefusal};
     use astream_cap::mint;
     use std::time::{SystemTime, UNIX_EPOCH};
@@ -558,16 +612,31 @@ fn a_lapse_still_ends_a_tail_parked_past_a_hidden_batch() {
     let god = mint(SECRET, "rw:/>").unwrap();
     let mut w = Client::connect(&sock).unwrap();
     w.attach(&god.filter, &god.tag).unwrap();
-    let soon = now_ms() + 1_000;
+    let soon = now_ms() + window_ms;
     let ro = mint(SECRET, &format!("ro,exp={soon}:/m/>")).unwrap();
     let mut r = Client::connect(&sock).unwrap();
-    r.attach(&ro.filter, &ro.tag).unwrap();
+    if let Err(e) = r.attach(&ro.filter, &ro.tag) {
+        assert!(now_ms() >= soon, "attach refused before its lapse: {e}");
+        return false;
+    }
     let mut sub = r.subscribe(0, "/m/>").unwrap();
     sub.set_read_timeout(Some(HANG)).unwrap();
-    until("the tail parked", || b.stats().parked_tails == 1);
+    // The park, or the lapse: a tail the lapse ended first never parks.
+    until("the tail parked or its capability lapsed", || {
+        b.stats().parked_tails == 1 || now_ms() >= soon
+    });
+    if b.stats().parked_tails != 1 {
+        return false;
+    }
     // A guarded broker authorizes a group as a subject.
     w.commit("/w/group/g", 0).unwrap();
     w.commit("/w/group/g", 0).unwrap();
+    if now_ms() >= soon {
+        return false;
+    }
+    // The tail was parked before the first commit and its park is bounded by the lapse,
+    // which had not come when the second commit's ack (and so the first's batch) was
+    // done: it was parked past both hidden records.
     assert_eq!(b.stats().tail_broadcasts, 0, "the commits broadcast");
     let err = sub
         .recv()
@@ -578,6 +647,7 @@ fn a_lapse_still_ends_a_tail_parked_past_a_hidden_batch() {
     );
     assert!(now_ms() >= soon, "refused before its deadline");
     assert_eq!(b.stats().parked_tails, 0);
+    true
 }
 
 /// Filter-indexed selective tail wakeups (`cost study B4 step 2`): with 1 matching
@@ -784,11 +854,21 @@ fn selective_tail_wake_skips_compacted_nonmatching_prefix_without_false_gap() {
 
     let mut p = Client::connect(&sock).unwrap();
     let s0 = b.stats();
+    // Each message is counted once `/m/>` has parked again, as in the tests above: a
+    // tail that finds the next record already visible when it comes back from a
+    // delivery reads it without parking, so a count taken only after all 20 is short
+    // of 20 whenever the tail fell behind the publisher (a descheduled thread on a
+    // loaded host) and its wait for 20 never ends. Counted this way each message is
+    // one wakeup of the one matching tail, and `/n/>` is still parked at its cursor.
     for i in 0..20u64 {
         let (off, _) = p.publish(1, i + 1, "/m/x", b"m").unwrap();
         assert_eq!(next(&mut m), (off, "/m/x".to_string()));
+        assert_eq!(
+            settled_wakeups(&b, &s0, 2, i + 1),
+            i + 1,
+            "message {i}: only the 1 matching subscriber woke"
+        );
     }
-    assert_eq!(settled_wakeups(&b, &s0, 2, 20), 20);
 
     // Compact `[0 .. 15)` while `n_sub` is still parked at cursor 0.
     assert_eq!(b.retain_before(15).unwrap(), 15);

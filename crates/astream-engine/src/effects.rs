@@ -1,6 +1,6 @@
 //! The effect seam: the single door to nondeterminism.
 //!
-//! Determinism is load-bearing from day one (doctrine §4.1): the engine reaches
+//! Determinism is load-bearing from day one: the engine reaches
 //! the clock, randomness, and storage *only* through this seam, so a seeded seam
 //! makes a recording reproducible and a replay exact. All four capability traits
 //! ([`Clock`], [`Rng`], [`Disk`], [`Net`]) are named, though the engine consults

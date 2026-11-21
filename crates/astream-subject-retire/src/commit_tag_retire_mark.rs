@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Marked `/a/retire` record classifier (`COMMIT_TAG_RETIRE = 2`, `RETIRE_PRODUCER_SEQ = u64::MAX`,
-//! `docs/ROADMAP.md` §2) distinguishing marked retire commands and legacy seq-zero compatibility
+//! Marked `/a/retire` record classifier (`COMMIT_TAG_RETIRE = 2`, `RETIRE_PRODUCER_SEQ = u64::MAX`)
+//! distinguishing marked retire commands and legacy seq-zero compatibility
 //! headers from ordinary `/a/retire` data rows (`Astream.SubjRet.TlaCommitTagRetireMark`).
 
 #[cfg(clean_islands)]

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-// The Clean island for cross-broker federation (`ROADMAP.md` & `DESIGN-aterm-fabric`
+// The Clean island for cross-broker federation (`DESIGN-aterm-fabric`
 // Federation across brokers), mounted under `cfg(clean_islands)` in `federation.rs`.
 // Proves that `federation_cursor_advance` and `federation_seq_clamp` maintain monotone
 // source cursor progression and keep mirrored producer sequences strictly below the

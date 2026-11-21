@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Evidence for `seccomp-bpf` pre-filtering, replay-time `-1` syscall neutralization,
-//! and unmodified `execve` foreign-process record/replay (`docs/ROADMAP.md` §4):
+//! and unmodified `execve` foreign-process record/replay:
 //! - Cross-platform Unix suite (`effects.seccomp-bpf-filter`, verified on macOS and Linux):
 //!   verifies the 11-instruction classic-BPF filter (`compile_five_syscall_filter` /
 //!   `eval_cbpf_seccomp`) across `AUDIT_ARCH_X86_64` and `AUDIT_ARCH_AARCH64`, and verifies

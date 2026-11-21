@@ -77,6 +77,12 @@
 //!   ([`OpenOptions::health_every`], [`Broker::keep_health`]), which another process
 //!   reads with [`read_health`] and is told whether the broker that wrote it still serves
 //!   the log.
+//! - **SIGNALS**: [`Client::signal`] is a volatile last-value publish. It appends nothing
+//!   to the log; the broker keeps each signalled subject's newest value in memory while the
+//!   connection that sent it lasts, and [`Client::subscribe_signals`] reads the current
+//!   values and then each change, conflated: a slow reader gets only the newest. For state
+//!   that is only true now (who is looking at what), where a log record would be a lie
+//!   as soon as its producer is gone.
 //! - **FORK-DELIVERY and cognition routing** build on the same SUBSCRIBE primitive.
 //! - **The durability dial**: Strict (a full flush per batch), Ordered (an ordering
 //!   barrier per batch, `F_BARRIERFSYNC`: a power loss leaves a prefix of whole batches,
@@ -157,7 +163,18 @@ pub mod refill;
 mod relay_floor;
 #[cfg(feature = "retention")]
 pub mod retention;
+/// The segmented log: segment files by base offset, a cut that unlinks whole segments.
+mod segments;
+pub use segments::{SegmentBytes, DEFAULT_SEGMENT_BYTES, MIN_SEGMENT_BYTES};
+#[cfg(all(test, feature = "retention"))]
+mod segments_tests;
 pub mod sharded;
+/// The signal table: the newest value of each subject a producer signals, in memory only.
+mod signal;
+pub use signal::{
+    MAX_SIGNAL_BODY, MAX_SIGNAL_BYTES, MAX_SIGNAL_BYTES_PER_CONN, MAX_SIGNAL_SUBJECTS,
+    MAX_SIGNAL_SUBJECTS_PER_CONN,
+};
 #[cfg(any(test, debug_assertions))]
 mod sim_device;
 pub mod sticky_fence;
@@ -188,8 +205,9 @@ pub use client::{
     ack, acks_owed, broker_refusal, client_walk_page_advance, client_walk_within_limit, connect,
     drain, protocol_mismatch, take, AcksOwed, AnyClient, AnyStream, AnySubscription, BrokerRefusal,
     Client, Closer, CreditWindow, Event, FreshPublish, Page, Pipelined, ProtocolMismatch, Record,
-    StampedPage, StampedRecord, SubjectBudget, Subscription, SubscriptionCloser, Transport, Walk,
-    ACK_SEQ_BASE, LAST_WALK_PAGES_MAX, MAX_FRESH_PIPELINE_BYTES,
+    Signal, SignalEvent, SignalSubscription, StampedPage, StampedRecord, SubjectBudget,
+    Subscription, SubscriptionCloser, Transport, Walk, ACK_SEQ_BASE, LAST_WALK_PAGES_MAX,
+    MAX_FRESH_PIPELINE_BYTES,
 };
 pub use federation::{
     federation_cursor_advance, federation_hop_allowed, federation_incarnation_fresh,
@@ -263,7 +281,8 @@ pub use proto::{
     ServedInfo, ServedReason, Tier, WireStats, ERR_FRESH_FENCED, ERR_FRESH_HELD, ERR_RATE_LIMITED,
     ERR_RETIRE_REFUSED, HELLO_REASON_MAX, RATE_LIMITED_PREFIX, REQUEST_BROKER_TIMES,
     REQUEST_BURST_MARKS, REQUEST_FRESH_PUBLISH, REQUEST_GAP_FENCES, REQUEST_GAP_NOTICES,
-    REQUEST_RELAY, REQUEST_RETIRE, REQUEST_SETTLE, REQUEST_STATS, REQUEST_TOLD_FETCH,
+    REQUEST_RELAY, REQUEST_RETIRE, REQUEST_SETTLE, REQUEST_SIGNALS, REQUEST_STATS,
+    REQUEST_TOLD_FETCH,
 };
 pub use recover::{recover_keep_within_len, recover_unit_start_advance};
 pub use refill::{

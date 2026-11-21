@@ -4,7 +4,7 @@
 #![allow(clippy::manual_unwrap_or)]
 
 //! Per-claim wall-clock timeout enforcement for the evidence runner
-//! (`docs/AUDIT-2026-09.md` line 90, `Astream.Evidence.TlaClaimTimeout`).
+//! (`Astream.Evidence.TlaClaimTimeout`).
 //!
 //! Bounds every claim command by a strictly positive wall-clock deadline
 //! (`DEFAULT_CLAIM_TIMEOUT_SECS` when a claim omits `timeout_secs`, floored at 1 ms via

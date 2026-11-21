@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! External identity authority (`docs/ROADMAP.md` §1): SSH-agent certificate validity chain, OIDC JWT `nbf`/`exp` claims window, overlapping host-key rollover, peer allowlist epoch reload, certificate revocation serial check, and principal key rotation ledger. forbid(unsafe_code).
+//! External identity authority: SSH-agent certificate validity chain, OIDC JWT `nbf`/`exp` claims window, overlapping host-key rollover, peer allowlist epoch reload, certificate revocation serial check, and principal key rotation ledger. forbid(unsafe_code).
 
 #![forbid(unsafe_code)]
 

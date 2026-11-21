@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Content-addressed workspace file synchronization (`docs/ROADMAP.md` "WASM and file-sync").
+//! Content-addressed workspace file synchronization.
 //!
 //! Computes deterministic SHA-256 chunk manifests ([`FileSyncManifest`]) over bounded relative
 //! workspace trees, computes minimal missing-chunk wire deltas ([`FileSyncDelta`]), frames

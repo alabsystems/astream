@@ -3,7 +3,7 @@
 
 // The Clean island for fine-grained per-byte PTY write->echo causal attribution across
 // overlapping in-flight inputs (`Astream.Term.TlaOverlapEcho`), mounted under
-// `cfg(clean_islands)` in `predict.rs` (`docs/ROADMAP.md` line 179).
+// `cfg(clean_islands)` in `predict.rs`.
 // Proves that `echo_queue_len_clamp` and `echo_matched_advance` maintain:
 // 1. `queuedBytes <= maxQueueCap` (bounded in-flight memory across bursts), and
 // 2. `prevRetiredOff <= lastRetiredOff` (monotone causal in-offset retirement across

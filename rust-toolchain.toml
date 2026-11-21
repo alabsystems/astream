@@ -1,4 +1,4 @@
-# astream builds on the Trust toolchain (owner directive 2026-09-28). `targo` picks the
+# astream builds on the Trust toolchain, the lab's toolchain for Rust. `targo` picks the
 # lane (`--unverified` or `trust`), not this file. There is no stock lane and no hosted CI;
 # the one stock step, `make stock`, only checks that a stock rustc still compiles astream.
 [toolchain]

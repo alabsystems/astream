@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Quorum leader election, epoch-fenced replica promotion, and divergent-follower rejoin
-//! (`docs/ROADMAP.md` "replicated-tier failure-injection matrix").
+//! (`broker.replicated-failover-matrix`).
 //!
 //! Coordinates multi-node failover over [`crate::BrokerLog`] and [`crate::Broker`]:
 //!

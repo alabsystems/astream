@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Checked owned-view & bounded-step retirement-history visibility coordinator
-//! (`docs/ROADMAP.md` §"Last-value retirement-history lifetime";
+//! (last-value retirement-history lifetime;
 //! `Astream.Broker.TlaLastRetireVisibilityView`).
 //!
 //! Models the visibility-owner retirement discipline:

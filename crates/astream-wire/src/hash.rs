@@ -3,6 +3,28 @@
 //! These are *not* cryptographic. They exist so partitioning and frame
 //! integrity are stable across processes with no external crate. Each function
 //! is named for exactly what it computes.
+//!
+//! # Contracts aterm cites
+//!
+//! aterm runs these functions as its own: its gzip and PNG CRC-32 (`aterm-codec`'s
+//! `Crc32`, `aterm-png`'s chunk check) is [`crc32_ieee_update`], its stable FNV-1a/64
+//! (`aterm-hash`) is [`fnv1a_64_update`] from [`FNV1A_64_INIT`], and its word step
+//! (`fnv_mix_u64`) is [`fnv1a_64_mix_u64`]. `hash_island.rs` proves the table
+//! recurrence, the CRC's bitwise refinement and split invariance, and the FNV left fold
+//! (`Astream.Wire.TlaSlicingCrc32`). Three contracts that aterm's `aterm-hash` and
+//! `aterm-png` specs wait on are not stated yet (the lab tracker's PR-79 carries them):
+//!
+//! 1. A direct `#[ensures]` on the slice loops [`crc32_ieee_update`] and
+//!    [`fnv1a_64_update`]: Trust's `trust-spec-elab` and `trust-clean-origin` do not
+//!    yet admit a `&[u8]` slice-fold spec.
+//! 2. Cross-crate theorem citation (`#[trust::cite_theorem]`, Increment 3), so that
+//!    `aterm-{codec,png,hash}` can cite `Astream.Wire.TlaSlicingCrc32`'s theorems.
+//! 3. A direct `#[ensures] result == (h ^ word).wrapping_mul(FNV1A_64_PRIME)` on
+//!    [`fnv1a_64_mix_u64`]: `trustc` `20565c325`'s `trust-spec-elab` rejects `u64`
+//!    `^`, `.wrapping_mul(...)` and `const` identifiers in `ensures`
+//!    (`SpecEnsuresUnparseable`), so the step is composed from the Clean-origin
+//!    [`fnv1a_64_xor`] and [`fnv1a_64_mul_prime`] and proved equal to that formula by
+//!    `fnv1a_64_mix_u64_eq_pieces`.
 
 // The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
 // `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.

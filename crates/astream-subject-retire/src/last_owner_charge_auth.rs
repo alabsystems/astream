@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! `last_owner` subject-charge authorization guard (`is_retire_charged()`, `docs/ROADMAP.md` §2:
-//! *"authorizes against the producer the subject is charged to (`last_owner`, refusing an updater
-//! that did not introduce the `Last` entry)"*, `Astream.SubjRet.TlaLastOwnerChargeAuth`).
+//! `last_owner` subject-charge authorization guard (`is_retire_charged()`): a retire authorizes
+//! against the producer the subject is charged to (`last_owner`, refusing an updater that did not
+//! introduce the `Last` entry) (`Astream.SubjRet.TlaLastOwnerChargeAuth`).
 
 #![allow(
     clippy::manual_map,

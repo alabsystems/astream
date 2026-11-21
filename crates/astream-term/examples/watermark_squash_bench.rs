@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Corpus benchmark for `term.predict.watermark-squash` (`docs/ROADMAP.md`,
-//! `docs/DESIGN-astream-term.md` §8, `docs/THEORY-deterministic-sessions.md` §3).
+//! Corpus benchmark for `term.predict.watermark-squash` (`docs/DESIGN-astream-term.md` §8,
+//! `docs/THEORY-deterministic-sessions.md` §3).
 //!
 //! Replays a deterministic multi-workload recorded terminal corpus through
 //! [`SpeculativeTerminal`] across both retirement lanes:

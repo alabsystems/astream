@@ -50,6 +50,11 @@ pub use crate::twins::client_walk_page_advance;
 #[cfg(clean_islands)]
 pub use client_island::client_walk_page_advance;
 
+/// Signals: a volatile last-value publish and the stream that reads them.
+#[path = "signal_client.rs"]
+mod signal_client;
+pub use signal_client::{Signal, SignalEvent, SignalSubscription};
+
 contract_fn! {
     /// Verified check that a `Last` walk page count lies within the liveness limit
     /// (`pages <= max_pages`), linked via `clean-kernel-defeq` to `client_walk_within_limit_isl`.
@@ -999,6 +1004,14 @@ impl<S: Read + Write> Client<S> {
         self.ext.supports_fresh_publish()
     }
 
+    /// Whether the latest `Hello` offered signals
+    /// ([`REQUEST_SIGNALS`](crate::REQUEST_SIGNALS)): [`signal`](Self::signal) and
+    /// [`subscribe_signals`](Self::subscribe_signals). False before `Hello` and against a
+    /// broker that predates them.
+    pub const fn supports_signals(&self) -> bool {
+        self.ext.supports_signals()
+    }
+
     /// The device the broker's log file is on and whether its full flush drains it, as the
     /// latest `Hello` answer told it ([`LogDevice`](crate::LogDevice)). `None` before any
     /// `Hello`, from a broker that predates the entry, or from one that could not read its
@@ -1887,6 +1900,8 @@ impl<S: Read + Write> Client<S> {
     /// ARMING ON A KEEPALIVE IS THE VERSION CHECK, the twin of
     /// [`Subscription::recv_live`] arming on a `Mark`: a client that never sends one is
     /// never cut, so every client that predates the verb idles exactly as it always has.
+    /// The one other request that arms the deadline is a [`signal`](Self::signal) the
+    /// broker keeps, a verb as new: its value must not outlive a vanished peer.
     ///
     /// `Ok(true)`: the broker knows the verb. `Ok(false)`: it predates it — it answered
     /// `ERR_REFUSED` ("malformed request"), a whole reply, so this client is in step —
@@ -6111,27 +6126,63 @@ mod ack_split {
     }
 
     /// **A BROKER THAT ANSWERED AND HUNG UP IS STILL READ.** Over a real socket pair
-    /// (the typed Unix client's own mode switch): two acks are written and the far end
-    /// shut down before the client reads; the tries switch a socket whose peer is gone
-    /// into and out of non-blocking mode, answer both acks, and then report the close as
-    /// `UnexpectedEof`, which latches the client.
+    /// (the typed Unix client's own mode switch): the far end reads the three publishes,
+    /// as a broker reads the requests it answers, writes two acks and shuts down before
+    /// the client reads; the tries switch a socket whose peer is gone into and out of
+    /// non-blocking mode, answer both acks, and then report the close as `UnexpectedEof`,
+    /// which latches the client. A far end that hung up with the publishes unread is read
+    /// the same, both acks answered: the failure after them is the OS's word for that
+    /// close, `UnexpectedEof` on macOS and `ConnectionReset` on Linux, which resets a Unix
+    /// socket whose peer closed with bytes it had not read, and latches the client too.
     #[cfg(unix)]
     #[test]
     fn a_broker_that_answered_and_hung_up_is_still_read() {
         use std::os::unix::net::UnixStream;
-        let (near, mut far) = UnixStream::pair().unwrap();
-        let mut c = Client::from_stream(near).nowait_by(UnixStream::set_nonblocking);
-        c.send_publish(1, 1, "/o/a", b"one").unwrap();
-        c.send_publish(1, 2, "/o/a", b"two").unwrap();
-        c.send_publish(1, 3, "/o/a", b"three").unwrap();
-        far.write_all(&[ack(0), ack(1)].concat()).unwrap();
-        far.shutdown(std::net::Shutdown::Both).unwrap();
-        drop(far);
-        assert_eq!(c.try_recv_publish_ack().unwrap(), Some((0, false)));
-        assert_eq!(c.try_recv_publish_ack().unwrap(), Some((1, false)));
-        let e = c.try_recv_publish_ack().unwrap_err();
-        assert_eq!(e.kind(), io::ErrorKind::UnexpectedEof, "{e}");
-        assert_eq!(c.owed_acks(), 0);
+        for read_first in [true, false] {
+            let (near, mut far) = UnixStream::pair().unwrap();
+            let mut c = Client::from_stream(near).nowait_by(UnixStream::set_nonblocking);
+            c.send_publish(1, 1, "/o/a", b"one").unwrap();
+            c.send_publish(1, 2, "/o/a", b"two").unwrap();
+            c.send_publish(1, 3, "/o/a", b"three").unwrap();
+            if read_first {
+                for seq in 1..=3 {
+                    let sent = read_frame(&mut far).unwrap().expect("a publish written");
+                    assert!(
+                        matches!(
+                            decode_request(&sent),
+                            Some(Request::Publish { producer_seq, .. }) if producer_seq == seq
+                        ),
+                        "publish {seq}"
+                    );
+                }
+            }
+            far.write_all(&[ack(0), ack(1)].concat()).unwrap();
+            far.shutdown(std::net::Shutdown::Both).unwrap();
+            drop(far);
+            assert_eq!(
+                c.try_recv_publish_ack().unwrap(),
+                Some((0, false)),
+                "read first: {read_first}"
+            );
+            assert_eq!(
+                c.try_recv_publish_ack().unwrap(),
+                Some((1, false)),
+                "read first: {read_first}"
+            );
+            let e = c.try_recv_publish_ack().unwrap_err();
+            if read_first {
+                assert_eq!(e.kind(), io::ErrorKind::UnexpectedEof, "{e}");
+            } else {
+                assert!(
+                    matches!(
+                        e.kind(),
+                        io::ErrorKind::UnexpectedEof | io::ErrorKind::ConnectionReset
+                    ),
+                    "{e}"
+                );
+            }
+            assert_eq!(c.owed_acks(), 0, "read first: {read_first}");
+        }
     }
 
     /// A connection a case opens, and the [`Closer`] on its socket that the hang

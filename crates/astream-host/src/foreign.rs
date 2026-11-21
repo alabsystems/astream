@@ -785,7 +785,7 @@ pub fn run_naive(file: &str) -> Result<u64, ForeignError> {
 
 // ============================================================================
 // Seccomp-BPF pre-filter + full syscall neutralization + unmodified `execve`
-// (`docs/ROADMAP.md` §4, `seccomp_record_replay`)
+// (`seccomp_record_replay`)
 // ============================================================================
 
 #[cfg(target_arch = "aarch64")]

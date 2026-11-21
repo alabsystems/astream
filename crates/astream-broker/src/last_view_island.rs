@@ -2,8 +2,8 @@
 // Copyright 2026 Andrew Yates
 
 // The Clean island for checked last-value retirement history (`Astream.Broker.TlaLastView`),
-// mounted under `cfg(clean_islands)` in `last_view.rs` (`docs/ROADMAP.md` "Last-value
-// retirement-history lifetime").
+// mounted under `cfg(clean_islands)` in `last_view.rs` (claim
+// `broker.last-view-retire-history`).
 //
 // Models `RetireHistory` (`available`, `published`, partial-prefix maintenance quantum
 // `PRUNE_WORK = 64`) and an owned `LastView` cursor (`pinned`, `pinnedVis`, `captureAvail`,

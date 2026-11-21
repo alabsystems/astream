@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Nested Claude Code PTY drive & crash-reattach deduplication fence
-//! (`docs/ROADMAP.md` §"The drive pipe, astream's own" lines 236–238;
+//! (the drive pipe, astream's own;
 //! `Astream.Pump.TlaNestedClaudePtyDriveFence`).
 //!
 //! Coordinates driving a nested Claude Code TUI session over `astream-host::Driver` + `aspump --profile claude`:

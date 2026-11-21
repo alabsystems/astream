@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Multi-step `LastStep::Pending` subject retirement history gated on `visible_head`
-//! (`ROADMAP.md` lines 296-305, `Astream.Retire.TlaPendingRetire`).
+//! (`Astream.Retire.TlaPendingRetire`).
 //!
 //! Generalizes single-retirement `Last` gating to an arbitrary bounded chain of interleaved
 //! `publish(off_1) -> retire(off_2) -> publish(off_3) -> retire(off_4)` transitions while

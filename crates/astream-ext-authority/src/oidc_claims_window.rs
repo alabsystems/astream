@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! OIDC workload JWT `iat`/`nbf`/`exp` clock-skew evaluator (`docs/ROADMAP.md` §1) enforcing bounded
+//! OIDC workload JWT `iat`/`nbf`/`exp` clock-skew evaluator enforcing bounded
 //! clock skew and monotonic `iat` freshness per workload subject (`Astream.ExtAuth.TlaOidcClaimsWindow`).
 
 #![allow(

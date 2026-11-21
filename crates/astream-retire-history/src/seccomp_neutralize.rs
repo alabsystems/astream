@@ -2,10 +2,10 @@
 // Copyright 2026 Andrew Yates
 
 //! Linux `seccomp-bpf` (`sock_filter`) intercepted-set bytecode compiler, in-Rust BPF virtual
-//! machine verifier, and `SECCOMP_RET_TRACE` replay syscall neutralizer (`ROADMAP.md` lines
-//! 161-175, `Astream.Retire.TlaSeccompNeutralize`).
+//! machine verifier, and `SECCOMP_RET_TRACE` replay syscall neutralizer
+//! (`Astream.Retire.TlaSeccompNeutralize`).
 //!
-//! Solves the two foreign-process replay gaps documented in `ROADMAP.md` lines 161-175:
+//! Solves two foreign-process replay gaps:
 //! 1. **Narrowed `seccomp-bpf` interception:** compiles a deterministic classic BPF program
 //!    over `seccomp_data` (`arch` at offset `4`, `nr` at offset `0`) for `x86_64` or `aarch64`
 //!    that returns `SECCOMP_RET_TRACE` ONLY for intercepted effect syscalls (`clock_gettime`,

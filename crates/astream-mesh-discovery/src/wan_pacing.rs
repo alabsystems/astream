@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Bandwidth-Delay Product (`BDP`) WAN pacing window and in-flight byte ledger
-//! (`ROADMAP.md` line 124, `Astream.Mesh.TlaWanPacing`).
+//! (`Astream.Mesh.TlaWanPacing`).
 //!
 //! Sizes cross-region replication pipelines dynamically from measured `(bw_bytes_per_sec, rtt_ms)`
 //! clamped to `[MIN_WAN_WINDOW_BYTES ..= MAX_WAN_INFLIGHT_BYTES]` via Clean-origin

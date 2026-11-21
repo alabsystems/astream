@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Kafka Metadata/Fetch repeated-topic deduplication & named-topic non-widening guard
-//! (`docs/AUDIT-2026-09.md` line 51; `Astream.Kafka.TlaKafkaDedupNamedTopicMetadataGuard`).
+//! (`Astream.Kafka.TlaKafkaDedupNamedTopicMetadataGuard`).
 //!
-//! Enforces the two Kafka wire-protocol scoping invariants from `AUDIT-2026-09.md` line 51:
+//! Enforces the two Kafka wire-protocol scoping invariants:
 //! 1. **No named-topic widening**: ONLY an explicit `NULL` topics array (`topics_array_is_null`)
 //!    enumerates all broker topics; an empty array `[]` returns `0` topics, and a named list
 //!    `["orders"]` returns ONLY `"orders"` (or `UNKNOWN_TOPIC_OR_PARTITION`), never widening to

@@ -3,7 +3,7 @@
 
 //! `/a/bind` & `/a/will` Control-Record Compaction Planner (`Astream.Broker.TlaBindWillCompaction`).
 //!
-//! Resolves the long-running `aterm` fleet log-compaction blocker identified in `docs/ROADMAP.md`:
+//! Resolves the long-running `aterm` fleet log-compaction blocker:
 //! - In `BrokerLog`, `/a/bind/<sid>` and `/a/will/<sid>` records tie session ownership and
 //!   disconnect last-wills to log offsets.
 //! - Once a session disconnects cleanly (releasing its `/a/bind` and either clearing or firing

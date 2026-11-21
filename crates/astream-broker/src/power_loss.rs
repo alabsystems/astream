@@ -21,8 +21,15 @@
 //! starts with no flushed content, even when its number was used before.
 //!
 //! What it does not model: a flush that reaches the media only in part (a file is either
-//! flushed or not), and the log's own appends (a compaction never writes the log; its records
-//! were flushed by the commits that wrote them, so the armed directory is taken as durable).
+//! flushed or not), and a one-file log's own appends (a compaction never writes the log; its
+//! records were flushed by the commits that wrote them, so the armed directory is taken as
+//! durable). A segmented log's segments are files like any other here: their full flushes
+//! report to it (`segments.rs`), so an append lives as of the flush that covered it.
+//!
+//! TRACED ([`arm_traced`]), it also keeps every directory a power loss could leave at EVERY
+//! moment since the arm, each tagged with what the test had [`note`]d then (the records it
+//! had acked): the crash simulation's sweep over a segmented log's roll and cut
+//! (`crash_sim_segments.rs`).
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -44,6 +51,10 @@ pub(crate) struct Recorder {
     names: Vec<BTreeMap<OsString, u64>>,
     /// The newest of `names` a directory flush made durable.
     synced: usize,
+    /// Traced: every image after every event, with the note standing then.
+    trace: Option<Vec<(u64, Image)>>,
+    /// The test's note ([`note`]).
+    note: u64,
 }
 
 thread_local! {
@@ -66,6 +77,26 @@ fn names_in(dir: &Path) -> BTreeMap<OsString, u64> {
     out
 }
 
+/// Arm this thread on `dir`, TRACED: every image every event leaves is kept ([`Recorder::traced`]).
+pub(crate) fn arm_traced(dir: &Path) {
+    arm(dir);
+    ARMED.with(|a| {
+        if let Some(r) = a.borrow_mut().as_mut() {
+            r.trace = Some(Vec::new());
+            r.record();
+        }
+    });
+}
+
+/// Tag the images from here on with `n` (a traced arm's acked records).
+pub(crate) fn note(n: u64) {
+    ARMED.with(|a| {
+        if let Some(r) = a.borrow_mut().as_mut() {
+            r.note = n;
+        }
+    });
+}
+
 /// Arm this thread on `dir`: everything in it now is taken as durable as it stands.
 pub(crate) fn arm(dir: &Path) {
     let names = names_in(dir);
@@ -81,6 +112,8 @@ pub(crate) fn arm(dir: &Path) {
             durable,
             names: vec![names],
             synced: 0,
+            trace: None,
+            note: 0,
         });
     });
 }
@@ -90,12 +123,14 @@ pub(crate) fn disarm() -> Option<Recorder> {
     ARMED.with(|a| a.borrow_mut().take())
 }
 
-/// Run `f` on the armed recorder when `path` is in its directory.
+/// Run `f` on the armed recorder when `path` is in its directory (and, traced, keep what a
+/// power loss now leaves).
 fn in_armed_dir(path: &Path, f: impl FnOnce(&mut Recorder)) {
     ARMED.with(|a| {
         if let Some(r) = a.borrow_mut().as_mut() {
             if path.parent() == Some(r.dir.as_path()) {
                 f(r);
+                r.record();
             }
         }
     });
@@ -137,6 +172,28 @@ pub(crate) fn dir_synced(path: &Path) {
 }
 
 impl Recorder {
+    /// Traced: keep every image a power loss now leaves, tagged with the note.
+    fn record(&mut self) {
+        let images = match &self.trace {
+            Some(_) => self.images(),
+            None => return,
+        };
+        let note = self.note;
+        if let Some(trace) = self.trace.as_mut() {
+            for image in images {
+                if !trace.iter().any(|(n, i)| *n == note && *i == image) {
+                    trace.push((note, image));
+                }
+            }
+        }
+    }
+
+    /// Traced: every image a power loss could have left since the arm, each with the note
+    /// standing when it could.
+    pub(crate) fn traced(self) -> Vec<(u64, Image)> {
+        self.trace.unwrap_or_default()
+    }
+
     /// Every directory a power loss now can leave: one per surviving prefix of the name
     /// changes since the last directory flush, each file holding only what was flushed.
     pub(crate) fn images(&self) -> Vec<Image> {

@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! OpenSSH `ssh-ed25519-cert-v01@openssh.com` binary wire parser, encoder, validity-window
-//! verifier, and monotone serial floor (`ROADMAP.md` lines 12-14, `Astream.CertAuth.TlaOpensshCert`).
+//! verifier, and monotone serial floor (`Astream.CertAuth.TlaOpensshCert`).
 //!
 //! Parses and encodes the OpenSSH `PROTOCOL.certkeys` binary wire format (RFC 4251 big-endian
 //! length-prefixed strings and integers) with zero third-party dependencies and zero panics:

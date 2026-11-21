@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Three-phase zero-drop region-gateway drain controller (`Serving -> Draining -> Closed`)
-//! (`ROADMAP.md` line 124, `Astream.Mesh.TlaGatewayDrain`).
+//! (`Astream.Mesh.TlaGatewayDrain`).
 
 #[cfg(clean_islands)]
 #[path = "gateway_drain_island.rs"]

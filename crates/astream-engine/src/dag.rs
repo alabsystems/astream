@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Step-DAG durable execution (`docs/ROADMAP.md` "step-DAG workflows",
-//! `docs/DESIGN-astream-term.md` §13).
+//! Step-DAG durable execution
+//! (`docs/DESIGN-astream-term.md` §13).
 //!
 //! Generalizes [`crate::WorkflowJournal`] from a linear `0..total` spine to an
 //! arbitrary directed acyclic graph ([`DagSpec`]) of steps with explicit parent

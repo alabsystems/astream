@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Pre-parse `Attach` proof-of-possession, non-empty secret, and `Hello->Attach` deadline gate
-//! (`docs/AUDIT-2026-09.md` lines 31, 33, 37, 38; `Astream.Cap.TlaAttachProofPreparseGate`).
+//! (`Astream.Cap.TlaAttachProofPreparseGate`).
 //!
-//! Eliminates three denial-of-service & authentication bypass hazards from `AUDIT-2026-09.md`:
+//! Eliminates three denial-of-service & authentication bypass hazards:
 //! - Refuses guarded open/attach under an empty HMAC secret (`secret_len == 0`),
 //! - Enforces a bounded `Hello -> Attach` handshake window (`attach_deadline_ms`) so an
 //!   unauthenticated peer sending `Hello` cannot hold a `MAX_CONNS` slot forever,

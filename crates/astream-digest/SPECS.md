@@ -22,7 +22,7 @@ the compiled Rust function can retire those tests. Nothing here is proved yet: a
 not a claim. The claims are `evidence/manifest.toml`'s (`digest.hmac-one-construction`).
 
 Gap numbers refer to the table in aterm's historical development audit
-`docs/AUDIT-trust-for-test-migration-2026-10-15.md` §7. Gap 0 (a seal that publishes
+`docs/AUDIT-trust-for-test-migration-2026-10-15.md` §7 (deleted; aterm's git history keeps it). Gap 0 (a seal that publishes
 Clean-discharged rows) blocks every spec, so it is listed on every row. **N1** is a gap that
 table does not have: a relational (2-safety / information-flow) lane, needed for the
 constant-time spec.

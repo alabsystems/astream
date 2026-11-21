@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Anti-rollback `.hw` first-commit pre-binding & watermark-failure log poisoning
-//! (`docs/AUDIT-2026-09.md` line 42; `Astream.Broker.TlaAntiRollbackHwFirstCommitPoison`).
+//! (`Astream.Broker.TlaAntiRollbackHwFirstCommitPoison`).
 //!
-//! Models both anti-rollback durability invariants from `AUDIT-2026-09.md` line 42:
+//! Models both anti-rollback durability invariants:
 //! 1. On the first commit of a verified log, the initial `.hw` sidecar MUST be bound and synced
 //!    BEFORE appending records so a crash mid-first-commit never leaves non-empty log records
 //!    without a `.hw` sidecar (which `open_encrypted_verified` would permanently refuse),

@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Uncarried retention-cut & replica retirement refusal gate (`is_retire_cut()`, `docs/ROADMAP.md`
-//! §2: *"refuses on a replica (`ERR_REFUSED`) or an uncarried retention-cut log (`retain_before`,
-//! `is_retire_cut()`), carries `last_owner` (`carried_charges`) across `retain_before_carrying_state`"*
-//! `Astream.SubjRet.TlaUncarriedCutRefusal`).
+//! Uncarried retention-cut & replica retirement refusal gate (`is_retire_cut()`): a retire is
+//! refused on a replica (`ERR_REFUSED`) or an uncarried retention-cut log (`retain_before`,
+//! `is_retire_cut()`), and `last_owner` (`carried_charges`) is carried across
+//! `retain_before_carrying_state` (`Astream.SubjRet.TlaUncarriedCutRefusal`).
 
 #![allow(
     clippy::manual_map,

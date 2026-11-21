@@ -1491,6 +1491,10 @@ pub struct BrokerLog {
     /// or an earlier open's `<log>.held` is read.
     #[cfg(feature = "retention")]
     hold: crate::held::HeldStore,
+    /// Record bytes retention's cuts wrote since the open
+    /// ([`retention_copied_bytes`](Self::retention_copied_bytes)).
+    #[cfg(feature = "retention")]
+    retention_copied: u64,
     /// Moves whenever what a tail below the base is owed may have changed — a compaction
     /// landed, the held store gave records up, the rules changed — so a tail looks again
     /// only then ([`gap_notice`](Self::gap_notice)).
@@ -1802,7 +1806,7 @@ pub(crate) struct Compaction {
     /// The log's permissions at the begin: every file the compaction writes that holds
     /// its records is created with them (`create_like`).
     perms: std::fs::Permissions,
-    copy: crate::compact::KeptCopy,
+    copy: crate::compact::Cut,
     /// What the retention rules carry into the held store and give up there (`held.rs`):
     /// written in the unlocked half before the copy, applied in memory at the finish.
     /// `None` for a log no rules retain.
@@ -1892,6 +1896,10 @@ type CarriedLast = BTreeMap<String, Arc<BrokerRecord>>;
 type CarriedLastBt = BTreeMap<String, u64>;
 #[cfg(feature = "retention")]
 type CarriedCharges = BTreeMap<String, u64>;
+
+/// What a carrying compaction keeps in `<log>.state`, staged for its switch.
+#[cfg(feature = "retention")]
+type Carried = (CarriedWills, CarriedLast, CarriedLastBt, CarriedCharges);
 
 /// Durable control state carried across log compaction (`<log>.state`).
 #[derive(Default)]
@@ -2598,9 +2606,9 @@ pub(crate) fn create_like(path: &Path, perms: &std::fs::Permissions) -> io::Resu
     create_like_access(path, perms, false)
 }
 
-/// A kept copy becomes the live log without reopening: give its owned descriptor
-/// read access too, retaining exactly the same creation and permission rules.
-#[cfg(feature = "retention")]
+/// A kept copy becomes the live log without reopening, and a segmented log's next
+/// segment is written and read through the descriptor that created it: give it read access
+/// too, retaining exactly the same creation and permission rules.
 pub(crate) fn create_like_read_write(
     path: &Path,
     perms: &std::fs::Permissions,
@@ -3184,7 +3192,7 @@ pub enum Durability {
     /// full-flush loop 169–214 µs and 4.2–5.2 ms). The full flushes this tier still issues
     /// — one per escalated batch, and about one per horizon under traffic — carry a full
     /// flush's whole tax. That includes this tier's own acks. On that Mac (2026-10-21,
-    /// aterm `docs/measured/flush-wait-2026-10-21.md`), every barrier begun with more
+    /// measured by a probe aterm ran), every barrier begun with more
     /// than 2 ms of a full flush from another thread still to run waited for that flush
     /// to end, 992 of 992. Under continuous traffic, up to one ack per horizon therefore
     /// takes a full flush's time.
@@ -3645,6 +3653,7 @@ impl Volume {
         match self {
             Volume::Detect => match file {
                 Backing::Os(f) => on_boot_volume(f),
+                Backing::Seg(s) => on_boot_volume(s.anchor()),
                 #[cfg(any(test, debug_assertions))]
                 Backing::Sim(_) => true,
             },
@@ -4007,6 +4016,17 @@ pub struct OpenOptions {
     /// checkpoint that is there and still bound to the log either way, and removes one that
     /// is not. Not used on a replica.
     pub checkpoint_every: Option<u64>,
+    /// `Some(size)`: the log is SEGMENTED (`segments.rs`, aterm tracker LT-A8): its records
+    /// live in segment files of about `size` bytes beside `<log>`, each named by its base
+    /// offset, and a retention cut unlinks the whole segments below its floor instead of
+    /// copying the records it keeps. Taken when the open creates the log; a segmented log
+    /// opened with `None` keeps the size it was created with, and a one-file log opened with
+    /// `Some` is refused (`InvalidInput`: an existing log is not segmented in place). A cut
+    /// of a segmented log takes the base of the newest segment at or below the offset it is
+    /// asked for, so it keeps up to one segment more than a one-file log's cut. Refused with
+    /// an at-rest key, on the simulated device and for an offline seal, none of which is built
+    /// for more than one file yet. `None` (the default): one file.
+    pub segment_bytes: Option<crate::segments::SegmentBytes>,
     /// When a [`BrokerLog`] used directly acknowledges a record ([`Acks::Publish`] by
     /// default): an embedder that acks only what a full flush covered says
     /// [`Acks::FullFlush`], and its Ordered run's unclean stop then moves no generation.
@@ -4056,6 +4076,13 @@ impl OpenOptions {
     #[must_use]
     pub const fn with_checkpoint_every(mut self, bytes: u64) -> Self {
         self.checkpoint_every = Some(bytes);
+        self
+    }
+
+    /// Builder helper setting [`Self::segment_bytes`].
+    #[must_use]
+    pub const fn with_segment_bytes(mut self, size: crate::segments::SegmentBytes) -> Self {
+        self.segment_bytes = Some(size);
         self
     }
 
@@ -4226,8 +4253,9 @@ pub struct InjectedFaults {
     pub write: bool,
     /// Every FULL `fsync` of the log fails: a Strict batch's (rolled back, nothing
     /// acked), and on the weaker tiers the full flush an escalated record, the horizon or
-    /// `flush_durable` asks for (the run is recorded `Lossy` and the log poisoned until it is
-    /// reopened: `BrokerLog::full_flush_failed`).
+    /// `flush_durable` asks for, and a segmented log's roll's flush of its active segment
+    /// (the run is recorded `Lossy` and the log poisoned until it is reopened:
+    /// `BrokerLog::full_flush_failed`).
     /// An [`Ordered`](Durability::Ordered) batch's ordering-only barrier is no full flush
     /// and still succeeds, which is how a test reaches the failure AFTER the barrier.
     pub sync: bool,
@@ -4771,16 +4799,19 @@ pub(crate) fn open_log_file(
     sync_dir: fn(&Path) -> io::Result<()>,
     before_lock: impl FnOnce(),
 ) -> io::Result<(File, bool)> {
+    // A folder at the path is refused `IsADirectory` on every host, as the check refuses it
+    // (`astream_sys::write_open_refusal`: Windows refuses it as access denied).
     let (file, created) = match open_with_options(
         FsOpenOptions::new().read(true).write(true).create_new(true),
         path,
     ) {
         Ok(f) => (f, true),
         Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (
-            open_with_options(FsOpenOptions::new().read(true).write(true), path)?,
+            open_with_options(FsOpenOptions::new().read(true).write(true), path)
+                .map_err(|e| astream_sys::write_open_refusal(e, path))?,
             false,
         ),
-        Err(e) => return Err(e),
+        Err(e) => return Err(astream_sys::write_open_refusal(e, path)),
     };
     before_lock();
     lock_exclusive(&file, path)?;
@@ -5293,6 +5324,135 @@ impl BrokerLog {
         )
     }
 
+    /// Make `file` the SEGMENTED log when `<log>` is one's anchor, or when the open created
+    /// it and `opts` asks for segments (`segments.rs`): the anchor written and flushed, then
+    /// the segments from the base on opened. The bases found below the base, a cut's, are
+    /// handed back for [`settle_segments`](Self::settle_segments). A one-file log stays one,
+    /// and is refused if `opts` asks for segments.
+    fn open_segments(
+        file: &mut Backing,
+        dir: &Dir,
+        path: &Path,
+        opts: &OpenOptions,
+        created: bool,
+        at_rest: bool,
+    ) -> io::Result<Vec<u64>> {
+        use crate::segments::{Found, Segments};
+        let asked = opts.segment_bytes.map(crate::segments::SegmentBytes::get);
+        let Backing::Os(anchor) = &*file else {
+            if asked.is_some() {
+                return Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "a segmented log is not built for the simulated device",
+                ));
+            }
+            return Ok(Vec::new());
+        };
+        if !dir.is_os() {
+            return Ok(Vec::new());
+        }
+        let not_at_rest = || {
+            io::Error::new(
+                io::ErrorKind::Unsupported,
+                format!(
+                    "{}: a segmented log is not built to be sealed at rest yet",
+                    path.display()
+                ),
+            )
+        };
+        // Refused before anything is written: an anchor left by a refused open would make
+        // the log a segmented one that no keyed open could ever take.
+        if at_rest && asked.is_some() {
+            return Err(not_at_rest());
+        }
+        // A log this open created, segmented or not, carries none of a deleted predecessor's
+        // segments: left, they would refuse its reopen while it is empty, or be adopted by a
+        // later segmented open with the records the predecessor dropped.
+        if created {
+            crate::segments::clear_created(path)?;
+        }
+        let roll = match (crate::segments::probe(anchor)?, asked) {
+            (Found::Anchor(stored), asked) => asked.unwrap_or(stored),
+            (Found::Empty, Some(asked)) => {
+                crate::segments::write_anchor(anchor, path, asked)?;
+                asked
+            }
+            (Found::Empty, None) => {
+                // A segmented log always has the segment at its base. Looked up by name,
+                // not by listing the directory, which a write-only one refuses.
+                if !created
+                    && std::fs::symlink_metadata(crate::segments::segment_path(
+                        path,
+                        read_base(path)?.0,
+                    ))
+                    .is_ok()
+                {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "{}: the log file is empty and segments of a segmented log are \
+                             beside it: its anchor is lost; refusing to open it as an empty \
+                             log, nothing touched",
+                            path.display()
+                        ),
+                    ));
+                }
+                return Ok(Vec::new());
+            }
+            (Found::OneFile, Some(_)) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "{}: the log is one file, and an existing log is not segmented in \
+                         place: open it without `segment_bytes`",
+                        path.display()
+                    ),
+                ));
+            }
+            (Found::OneFile, None) => return Ok(Vec::new()),
+        };
+        if at_rest {
+            return Err(not_at_rest());
+        }
+        let base = read_base(path)?;
+        let (segs, below) = Segments::open(Arc::clone(anchor), path, roll, base.0)?;
+        *file = Backing::Seg(segs);
+        Ok(below)
+    }
+
+    /// After the open judged any cut's intent and read the base: the segments it opened must
+    /// start at that base (a finished cut's base is the one they were opened at, and a
+    /// discarded one moved nothing), and the segments below it, which a cut dropped, are
+    /// removed.
+    fn settle_segments(
+        segs: &crate::segments::Segments,
+        path: &Path,
+        base: u64,
+        below: Vec<u64>,
+    ) -> io::Result<()> {
+        if segs.bounds().first().map(|&(b, _)| b) != Some(base) {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{}: the base moved to {base} while the open judged a cut, away from the \
+                     segments it opened; refusing to open, nothing more touched",
+                    path.display()
+                ),
+            ));
+        }
+        if !below.is_empty() {
+            let n = crate::segments::unlink_below(path, base)?;
+            if n > 0 {
+                eprintln!(
+                    "astream-broker: {}: removed {n} segment(s) below the base {base} that a \
+                     finished cut left",
+                    path.display()
+                );
+            }
+        }
+        Ok(())
+    }
+
     /// THE open, every constructor's: lock the file, run the embedder's `prepare`,
     /// settle an offline seal's switch, recover, settle the identity, and record it around
     /// the flush.
@@ -5402,6 +5562,11 @@ impl BrokerLog {
             }
             None => (file, created),
         };
+        // THE SEGMENTED LOG (`segments.rs`): `<log>` is its anchor, and its records are the
+        // segments at or above its base, read as one byte range from here on. The segments a
+        // cut left below the base are removed once its intent is judged, below.
+        let segmented_below =
+            Self::open_segments(&mut file, &dir, &path, opts, created, at_rest_key.is_some())?;
         // A log that ever took a replicated record is a replica FOREVER, across every
         // constructor: the marker beside it is read before a single record is decoded.
         // A log WE just created carries none of that history, so a marker left beside
@@ -5475,7 +5640,8 @@ impl BrokerLog {
         };
         // A compaction a crash interrupted is finished or discarded HERE, before the base
         // and the carried state are read, from its intent and the log's first frame
-        // (`compact.rs`): it touches only the sidecars, never the log file.
+        // (`compact.rs`): it touches only the sidecars, never the log file (a segmented log's
+        // cut unlinks the segments below its base, which the log no longer reads).
         #[cfg(feature = "retention")]
         if dir.is_os() && !created {
             crate::compact::recover(
@@ -5491,6 +5657,9 @@ impl BrokerLog {
         } else {
             (Offset::ZERO, CompactedState::default())
         };
+        if let Backing::Seg(segs) = &file {
+            Self::settle_segments(segs, &path, base.0, segmented_below)?;
+        }
         // The held store at the base just read (`held.rs`): frames of a compaction that
         // never landed are cut away here, as its intent was judged above.
         #[cfg(feature = "retention")]
@@ -5813,6 +5982,16 @@ impl BrokerLog {
             (tier, rebuilt, newest_at, checkpoint_state),
             standing,
         ) = folded?;
+        if let Backing::Seg(segs) = &file {
+            segs.check(
+                base.0,
+                kept_records,
+                keep as u64,
+                keep < len,
+                repair_cut,
+                |i| tier.at(i),
+            )?;
+        }
         let pre_cut_head = base.0.saturating_add(scanned as u64);
         let kept_head = base.0.saturating_add(kept_records as u64);
         let dropped = len.saturating_sub(keep) as u64;
@@ -5969,6 +6148,8 @@ impl BrokerLog {
             compact_seam: crate::compact::Seam::default(),
             #[cfg(feature = "retention")]
             hold,
+            #[cfg(feature = "retention")]
+            retention_copied: 0,
             retention_epoch: 0,
             checkpoint_every: opts.checkpoint_every.filter(|_| may_checkpoint),
             checkpoint: ckpt::Standing::default(),
@@ -6116,7 +6297,7 @@ impl BrokerLog {
             res
         };
         let res = if dropped > 0 {
-            res.and_then(|()| file.resize_file(keep as u64))
+            res.and_then(|()| file.cut_back(keep as u64))
         } else {
             res
         };
@@ -6453,12 +6634,18 @@ impl BrokerLog {
     /// held head kept back below it may now be shown and acked. Never on a poisoned log:
     /// after a failed full flush a later one that succeeds says nothing about what the
     /// failed one was to cover ([`full_flush_failed`](Self::full_flush_failed)).
+    ///
+    /// The target is taken no further than the log's head NOW: a flush issued outside the
+    /// lock settles after whatever ran meanwhile, and a replica's truncation
+    /// ([`truncate_replica_to`](Self::truncate_replica_to)) can have cut the log below the
+    /// head it was issued for (on a segmented log, flushed a file the log no longer holds).
+    /// The records appended again above the cut are not what that flush covered.
     pub(crate) fn full_flush_done(&mut self, target: u64) {
         if self.vitals.poisoned().is_some() {
             return;
         }
         LogVitals::add(&self.vitals.full, 1);
-        self.durable_head = self.durable_head.max(target);
+        self.durable_head = self.durable_head.max(target.min(self.next.0));
         if let Some(h) = self.held_from {
             if h < self.durable_head {
                 self.held_from = None;
@@ -7060,7 +7247,7 @@ impl BrokerLog {
             None => None,
         };
         let disk_step: io::Result<()> = (|| {
-            self.file.resize_file(keep as u64)?;
+            self.file.cut_back(keep as u64)?;
             self.file.sync_all()?;
             logid::write(&self.dir, &serving)?;
             #[cfg(feature = "anti-rollback")]
@@ -7467,8 +7654,14 @@ impl BrokerLog {
         if !self.dir.is_os() {
             return (0, self.durable_len);
         }
-        let mut segments = 1u64;
-        let mut bytes = self.durable_len;
+        let (mut segments, mut bytes) = match &self.file {
+            Backing::Seg(s) => (
+                (s.count() as u64).saturating_add(1),
+                self.durable_len
+                    .saturating_add(crate::segments::ANCHOR_LEN as u64),
+            ),
+            _ => (1u64, self.durable_len),
+        };
         let sidecars = [
             logid::identity_path(&self.path),
             base_path(&self.path),
@@ -9261,6 +9454,11 @@ impl BrokerLog {
             self.abort_batch();
             return Err(e);
         }
+        // A segmented log rolls its active segment before the batch that finds it full.
+        if let Err(e) = self.roll_if_due(self.next.0) {
+            self.abort_batch();
+            return Err(e);
+        }
         // Strict: write + fsync the whole batch before promoting (ack ⟹ on disk).
         // Ordered: write + barrier (ack ⟹ ordered on the device). Relaxed: skip the
         // fsync — the write puts the bytes in the page cache, so the ack means
@@ -9908,6 +10106,7 @@ impl BrokerLog {
         // The watermark is pre-bound before a byte is written. Then the append: on disk
         // when it returns Ok under Strict, and for an escalated record on any tier.
         self.prebind_watermark(&frame)?;
+        self.roll_if_due(rec.seq.0)?;
         let frame_at = self.durable_len;
         let durable = self.append_frame(&frame, escalated)?;
         update_durable_wills_on_record(
@@ -10783,6 +10982,15 @@ impl BrokerLog {
         self.base
     }
 
+    /// The RECORD BYTES retention's cuts wrote since this open: a one-file log's cut copies
+    /// every byte it keeps to `<log>.kept`; a segmented log's unlinks the segments below its
+    /// floor and writes none ([`OpenOptions::segment_bytes`]). The sidecars a cut writes (its
+    /// intent, the base, the carried state) are not records and are not counted.
+    #[cfg(feature = "retention")]
+    pub const fn retention_copied_bytes(&self) -> u64 {
+        self.retention_copied
+    }
+
     /// Compact the log by dropping records with offset `< min_offset` (retention). Kept
     /// records keep their ABSOLUTE offsets, so a consumer at a surviving offset is
     /// unaffected; one below the new base catches up from the earliest retained.
@@ -10859,7 +11067,10 @@ impl BrokerLog {
                 "retention: a batch is staged; compact when idle",
             ));
         }
-        let min = crate::proto::compact_floor_monotone(min_offset.0.min(self.next.0), self.base.0);
+        let min = self.segment_floor(crate::proto::compact_floor_monotone(
+            min_offset.0.min(self.next.0),
+            self.base.0,
+        ));
         if min <= self.base.0 {
             return Ok(None);
         }
@@ -10916,14 +11127,17 @@ impl BrokerLog {
         };
         let src = Arc::clone(self.file.os()?);
         let perms = src.metadata()?.permissions();
-        let copy = crate::compact::KeptCopy::begin(
-            &self.path,
-            src,
-            &perms,
-            drop_count,
-            self.durable_len,
-            self.compact_seam.clone(),
-        )?;
+        let copy = match &self.file {
+            Backing::Seg(segs) => crate::compact::Cut::Unlink(self.unlinked(segs, min)?),
+            _ => crate::compact::Cut::Copy(crate::compact::KeptCopy::begin(
+                &self.path,
+                src,
+                &perms,
+                drop_count,
+                self.durable_len,
+                self.compact_seam.clone(),
+            )?),
+        };
         Ok(Compaction {
             min,
             carry,
@@ -11242,10 +11456,10 @@ impl BrokerLog {
         at_least: u64,
     ) -> io::Result<Option<RetentionJob>> {
         self.check_poisoned()?;
-        let at_least = crate::proto::compact_floor_monotone(
+        let at_least = self.segment_floor(crate::proto::compact_floor_monotone(
             at_least.min(ceiling).min(self.next.0),
             self.base.0,
-        );
+        ));
         if !self.hold.active && at_least <= self.base.0 {
             return Ok(None);
         }
@@ -11267,6 +11481,15 @@ impl BrokerLog {
         let mut plan = self.retention_plan(now, ceiling, None);
         if plan.cut < at_least {
             plan = self.retention_plan(now, ceiling, Some(at_least));
+        }
+        // A segmented log cuts at a segment's base: the planning again at the floor, so the
+        // held store carries exactly what the cut drops. The floor is a CAP, as the visible
+        // head is: the cut the rules want is asked for and held back to the floor, so a class
+        // still past its bytes above it gets the slack the planner gives a held-back cut, not
+        // a room of 0 that would ask for a tick after every batch until the next roll.
+        let floor = self.segment_floor(plan.cut);
+        if floor != plan.cut {
+            plan = self.retention_plan(now, floor, Some(plan.cut));
         }
         let base = self.base.0;
         // A tick that took stamps writes them even when nothing else changes, so a record's
@@ -11390,10 +11613,13 @@ impl BrokerLog {
     /// [`compact_finish`](Self::compact_finish), saying what the retention rules did.
     #[cfg(feature = "retention")]
     fn compact_finish_tick(&mut self, mut c: Compaction) -> io::Result<RetentionTick> {
-        use crate::compact::{staged_state_path, write_intent, Intent, Step};
+        use crate::compact::{write_intent, Intent, Step};
         if let Err(e) = self.compact_ready(&c) {
             self.compact_abandon(c);
             return Err(e);
+        }
+        if c.copy.unlinks() {
+            return self.compact_finish_unlink(c);
         }
         // 1) The bytes the log took since the begin, and their flush: the unlocked copy
         //    flushed the rest, so this flush covers only the delta.
@@ -11417,30 +11643,16 @@ impl BrokerLog {
         c.relay_floors.keep_origins_of(&self.relay_floors);
         // 2) The carried state, staged at the new base: written BEFORE the intent, so an
         //    intent that carries state always has it beside it.
-        let carried = if c.carry {
-            let (wills, last, last_bt, charges) = self.carried_below(c.min);
-            let state = CompactedState {
-                bind: self.bind.clone(),
-                carried_wills: wills.clone(),
-                high_water: self.high_water.clone(),
-                group_commits: self.group_commits.clone(),
-                carried_last: last.clone(),
-                carried_last_bt: last_bt.clone(),
-                carried_charges: charges.clone(),
-                uncarried_cut_tainted: self.uncarried_cut_tainted,
-                relay_floors: c.relay_floors.clone(),
-            };
-            let staged = staged_state_path(&self.path);
-            let key = self.at_rest_ref();
-            if let Err(e) = write_state_at(&staged, key, c.min, &state, Some(&c.perms)) {
+        let carried = match self.compact_stage_state(&c) {
+            Ok(carried) => carried,
+            Err(e) => {
                 self.compact_abandon(c);
                 return Err(e);
             }
-            self.compact_crash(Step::State)?;
-            Some((wills, last, last_bt, charges))
-        } else {
-            None
         };
+        if carried.is_some() {
+            self.compact_crash(Step::State)?;
+        }
         // 3) The intent, durable before the rename.
         let intent = Intent {
             old_base: self.base.0,
@@ -11448,6 +11660,7 @@ impl BrokerLog {
             old,
             new: c.copy.first(),
             carries_state: c.carry,
+            unlinks: false,
         };
         if let Err(e) = write_intent(&self.path, self.at_rest_ref(), &intent, &c.perms) {
             self.compact_abandon(c);
@@ -11456,16 +11669,37 @@ impl BrokerLog {
         self.compact_crash(Step::Intent)?;
         // Own the replacement before publishing its name. The lock then follows
         // this exact descriptor through the rename, including every error below.
-        if let Err(e) = lock_exclusive(c.copy.destination(), c.copy.kept()) {
-            self.compact_abandon(c);
-            return Err(e);
-        }
+        let locked = match c.copy.kept_copy() {
+            Some((dest, kept)) => lock_exclusive(dest, kept).map(|()| kept.to_path_buf()),
+            None => Err(io::Error::other(
+                "retention: a copying cut without its copy",
+            )),
+        };
+        let kept = match locked {
+            Ok(kept) => kept,
+            Err(e) => {
+                self.compact_abandon(c);
+                return Err(e);
+            }
+        };
         // 4) The switch. A failed rename leaves the log as it was.
-        if let Err(e) = rename_path(c.copy.kept(), &self.path) {
+        if let Err(e) = rename_path(&kept, &self.path) {
             self.compact_abandon(c);
             return Err(e);
         }
-        self.file = Backing::from_file(c.copy.into_destination());
+        self.retention_copied = self.retention_copied.saturating_add(c.copy.copied_bytes());
+        let copy = std::mem::replace(
+            &mut c.copy,
+            crate::compact::Cut::Unlink(crate::compact::Unlinked {
+                cut,
+                old,
+                first: None,
+                seam: self.compact_seam.clone(),
+            }),
+        );
+        if let Some(dest) = copy.into_destination() {
+            self.file = Backing::from_file(dest);
+        }
         // Every byte moved: the checkpoint of the log as it was binds to nothing now.
         ckpt::discard(&self.path);
         self.checkpoint = ckpt::Standing::default();
@@ -11480,9 +11714,22 @@ impl BrokerLog {
             );
             return Err(e);
         }
-        // 5) In memory (infallible): re-base, drop the pruned records and every dedup
-        //    entry whose retained offset lies below `c.min` without decoding dropped
-        //    cold frames from disk, then take the carried state and the new identity.
+        Ok(self.compact_apply(c, cut, carried, &intent))
+    }
+
+    /// The in-memory half of a cut whose files switched (infallible): re-base, drop the
+    /// pruned records and every dedup entry whose retained offset lies below `c.min` without
+    /// decoding dropped cold frames from disk, then take the carried state and the new
+    /// identity. `cut` is how far every byte position moved down.
+    #[cfg(feature = "retention")]
+    fn compact_apply(
+        &mut self,
+        mut c: Compaction,
+        cut: u64,
+        carried: Option<Carried>,
+        intent: &crate::compact::Intent,
+    ) -> RetentionTick {
+        // 5) In memory.
         self.dedup.retain_from(c.min);
         self.relay_floors = std::mem::take(&mut c.relay_floors);
         let drain_len = usize::try_from(c.drop_count)
@@ -11535,7 +11782,175 @@ impl BrokerLog {
             None => self.hold.cut_unplanned(c.min),
         }
         self.retention_epoch = self.retention_epoch.wrapping_add(1);
-        Ok(tick)
+        tick
+    }
+
+    /// The carried state of a carrying cut `c`, staged at `<log>.state.next` at the new base
+    /// ([`Step::State`](crate::compact::Step::State)): `None` for a cut that carries none.
+    #[cfg(feature = "retention")]
+    fn compact_stage_state(&self, c: &Compaction) -> io::Result<Option<Carried>> {
+        if !c.carry {
+            return Ok(None);
+        }
+        let (wills, last, last_bt, charges) = self.carried_below(c.min);
+        let state = CompactedState {
+            bind: self.bind.clone(),
+            carried_wills: wills.clone(),
+            high_water: self.high_water.clone(),
+            group_commits: self.group_commits.clone(),
+            carried_last: last.clone(),
+            carried_last_bt: last_bt.clone(),
+            carried_charges: charges.clone(),
+            uncarried_cut_tainted: self.uncarried_cut_tainted,
+            relay_floors: c.relay_floors.clone(),
+        };
+        let staged = crate::compact::staged_state_path(&self.path);
+        write_state_at(&staged, self.at_rest_ref(), c.min, &state, Some(&c.perms))?;
+        Ok(Some((wills, last, last_bt, charges)))
+    }
+
+    /// The floor a cut to `min` takes: a segmented log's newest segment base at or below it
+    /// (`segments.rs`, "Cut"), `min` itself for a one-file log.
+    #[cfg(feature = "retention")]
+    fn segment_floor(&self, min: u64) -> u64 {
+        match &self.file {
+            Backing::Seg(segs) => segs.floor(min),
+            _ => min,
+        }
+    }
+
+    /// A segmented log's cut to `min`, a segment's base above the log's: where the kept
+    /// segments start and the log's first frame. The first kept frame is read at the finish.
+    #[cfg(feature = "retention")]
+    fn unlinked(
+        &self,
+        segs: &crate::segments::Segments,
+        min: u64,
+    ) -> io::Result<crate::compact::Unlinked> {
+        use crate::compact::FrameId;
+        let Some(cut) = segs.start_of(min) else {
+            return Err(io::Error::other(format!(
+                "retention: no segment of the log starts at the floor {min}"
+            )));
+        };
+        let old = FrameId::of(&open_scan::frame_at(&self.file, 0)?);
+        Ok(crate::compact::Unlinked {
+            cut,
+            old,
+            first: None,
+            seam: self.compact_seam.clone(),
+        })
+    }
+
+    /// FINISH A SEGMENTED LOG'S CUT (`segments.rs`, "Cut"), between batches: read the first
+    /// kept frame, flush the active segment in full, stage the carried state, write the
+    /// intent, then switch by the base and unlink the segments below it. No record is copied.
+    /// A failure after the base moved POISONS the log, and the reopen finishes the cut from
+    /// its intent.
+    ///
+    /// The first kept frame is read HERE, under the locks, not at the begin: a cut that keeps
+    /// the active segment empty would otherwise name no first frame in its intent while the
+    /// writer appended one before the finish, and an open after a crash past the base would
+    /// find a first frame that is neither side's and refuse the log. And the active segment
+    /// is flushed before the intent names it: the sealed ones were flushed whole at their
+    /// roll, but a cut whose floor is the active segment keeps bytes a Relaxed tier never
+    /// flushed, and a power loss after the base moved would leave a first frame that is
+    /// neither side's too.
+    #[cfg(feature = "retention")]
+    fn compact_finish_unlink(&mut self, mut c: Compaction) -> io::Result<RetentionTick> {
+        use crate::compact::{write_intent, FrameId, Intent, Step};
+        let (Some(old), Some(cut)) = (c.copy.old(), c.copy.cut()) else {
+            self.compact_abandon(c);
+            return Err(io::Error::other(
+                "retention: the segmented cut lost its first frame",
+            ));
+        };
+        let first = if cut < self.durable_len {
+            match open_scan::frame_at(&self.file, cut) {
+                Ok(f) => Some(FrameId::of(&f)),
+                Err(e) => {
+                    self.compact_abandon(c);
+                    return Err(e);
+                }
+            }
+        } else {
+            None
+        };
+        if let crate::compact::Cut::Unlink(u) = &mut c.copy {
+            u.first = first;
+        }
+        if let Err(e) = self.file.sync_data() {
+            // As every failed full flush: what it was to cover may be gone (poisons the log).
+            self.full_flush_failed(&e);
+            self.compact_abandon(c);
+            return Err(e);
+        }
+        c.relay_floors.keep_origins_of(&self.relay_floors);
+        let carried = match self.compact_stage_state(&c) {
+            Ok(carried) => carried,
+            Err(e) => {
+                self.compact_abandon(c);
+                return Err(e);
+            }
+        };
+        if carried.is_some() {
+            self.compact_crash(Step::State)?;
+        }
+        let intent = Intent {
+            old_base: self.base.0,
+            new_base: c.min,
+            old,
+            new: c.copy.first(),
+            carries_state: c.carry,
+            unlinks: true,
+        };
+        if let Err(e) = write_intent(&self.path, self.at_rest_ref(), &intent, &c.perms) {
+            self.compact_abandon(c);
+            return Err(e);
+        }
+        self.compact_crash(Step::Intent)?;
+        if let Err(e) = self.unlink_switch(c.min, c.carry, &intent) {
+            self.publish_poison(
+                format!("retention cut failed after its base moved: {e}"),
+                None,
+            );
+            return Err(e);
+        }
+        // The positions moved: the checkpoint of the log as it was binds to nothing now.
+        ckpt::discard(&self.path);
+        self.checkpoint = ckpt::Standing::default();
+        if let Backing::Seg(segs) = &mut self.file {
+            segs.drop_below(c.min);
+        }
+        Ok(self.compact_apply(c, cut, carried, &intent))
+    }
+
+    /// Steps 3 to 6 of a segmented cut (`segments.rs`): the base (the switch), the carried
+    /// state installed, the watermark, the segments below the base unlinked, the intent
+    /// removed. Each is idempotent, as the open's finish of the same intent is.
+    #[cfg(feature = "retention")]
+    fn unlink_switch(
+        &mut self,
+        min: u64,
+        carry: bool,
+        intent: &crate::compact::Intent,
+    ) -> io::Result<()> {
+        use crate::compact::{remove_intent, staged_state_path, Step};
+        write_base(&self.path, min)?;
+        self.compact_crash(Step::Base)?;
+        if carry {
+            let state = state_path(&self.path);
+            rename_path(&staged_state_path(&self.path), &state)?;
+            sync_parent_dir(&state)?;
+            self.compact_crash(Step::StateInstalled)?;
+        }
+        if self.compact_watermark(min, intent)? {
+            self.compact_crash(Step::Watermark)?;
+        }
+        crate::segments::unlink_below(&self.path, min)?;
+        self.compact_crash(Step::Unlink)?;
+        remove_intent(&self.path)?;
+        self.compact_crash(Step::IntentRemoved)
     }
 
     /// Whether the log is still the one `c` began on, between batches.
@@ -11937,6 +12352,35 @@ impl BrokerLog {
         self.newest_at = Some(self.durable_len);
         self.durable_len = self.durable_len.saturating_add(frame_bytes.len() as u64);
         Ok(durable)
+    }
+
+    /// ROLL a segmented log's active segment before an append at offset `next` when it is
+    /// full (`segments.rs`, "Roll"); nothing for a one-file log. What a failed roll does is
+    /// by what failed (`segments::RollError`): a failed full flush of the active segment is
+    /// every failed full flush ([`full_flush_failed`](Self::full_flush_failed): `Lossy`,
+    /// latched to Strict, poisoned); a next segment that could not be created refuses this
+    /// append or batch alone (nothing changed, and the next one asks again); anything after
+    /// the next segment exists poisons the log, and its reopen judges the files.
+    fn roll_if_due(&mut self, next: u64) -> io::Result<()> {
+        use crate::segments::RollError;
+        let Backing::Seg(segs) = &mut self.file else {
+            return Ok(());
+        };
+        if !segs.roll_due(self.durable_len) {
+            return Ok(());
+        }
+        match segs.roll(next, self.durable_len, self.faults.sync) {
+            Ok(()) => Ok(()),
+            Err(RollError::Create(e)) => Err(e),
+            Err(RollError::Flush(e)) => {
+                self.full_flush_failed(&e);
+                Err(e)
+            }
+            Err(RollError::After(e)) => {
+                self.publish_poison(format!("the segmented log could not roll: {e}"), None);
+                Err(e)
+            }
+        }
     }
 
     /// Write `bytes` at byte `at`, the log's durable length, by position
@@ -12534,7 +12978,12 @@ mod tests {
         // to assert. Probe rather than guess.
         let unreadable = File::open(&dir).is_err();
         let path = dir.join("x.log");
-        let opened = BrokerLog::open(&path);
+        // Twice: the creating open, then the reopen of the log it left empty, which looks
+        // for a segmented log's segment beside it without listing the directory.
+        let opened = BrokerLog::open(&path).and_then(|log| {
+            drop(log);
+            BrokerLog::open(&path)
+        });
         let _ = std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700));
         let _ = std::fs::remove_dir_all(&dir);
         if unreadable {

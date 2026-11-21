@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Single-threaded `fork` + `PTRACE_TRACEME` + `execve` lineage tracker (`docs/ROADMAP.md` §4:
-//! *"tracing a separately exec'd, unmodified binary (fork, `PTRACE_TRACEME`, `execve`),
-//! single-threaded first"*, `Astream.SecReplay.TlaPtraceExecveLineage`).
+//! Single-threaded `fork` + `PTRACE_TRACEME` + `execve` lineage tracker for tracing a separately
+//! exec'd, unmodified binary, single-threaded first
+//! (`Astream.SecReplay.TlaPtraceExecveLineage`).
 
 #![allow(
     clippy::manual_map,

@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Strict RFC 8259 JSON `\uXXXX` / control-byte validator & `curl --config` API-key injection guard
-//! (`docs/AUDIT-2026-09.md` line 51; `Astream.Live.TlaLiveJsonStrictEscapeCurlKeyGuard`).
+//! (`Astream.Live.TlaLiveJsonStrictEscapeCurlKeyGuard`).
 //!
-//! Enforces both `astream-live` parser & capture-config security invariants from `AUDIT-2026-09.md`:
+//! Enforces both `astream-live` parser & capture-config security invariants:
 //! 1. **RFC 8259 §7 strictness**: raw control bytes (`0x00..=0x1F`) inside JSON strings are
 //!    rejected, and `\uXXXX` escapes require 4 strict ASCII hex digits (refusing `\u+041` / `\u-041`
 //!    which `u16::from_str_radix` would otherwise accept!).

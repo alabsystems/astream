@@ -153,6 +153,10 @@ pub use crate::twins::{rate_clock_advance, rate_tokens_clamp};
 #[cfg(clean_islands)]
 pub use rate_island::{rate_clock_advance, rate_tokens_clamp};
 
+/// Signals: volatile last-value publishes, served beside the log (aterm tracker AF-15).
+#[path = "signal_serve.rs"]
+mod signal_serve;
+
 contract_fn! {
     /// Verified check that a producer's refilled token balance covers `cost`
     /// (`cost <= tokens`), linked via `clean-kernel-defeq` to `rate_tokens_sufficient_isl`.
@@ -2212,9 +2216,10 @@ pub const IDLE_MARK_DEADLINE: Duration = Duration::from_secs(30);
 /// (fenced as ever: a later incarnation's record still suppresses it) and its slot is
 /// freed.
 ///
-/// OPT-IN BY CONSTRUCTION. The deadline is armed by the client's first `Keepalive`,
-/// so a client that never sends one — every client that predates the verb, idling
-/// for hours on a quiet link — is never cut. A Unix-socket connection is never held
+/// OPT-IN BY CONSTRUCTION. The deadline is armed by the client's first `Keepalive`
+/// (or its first [`Request::Signal`] the broker keeps, whose value must not outlive a
+/// peer that vanished), so a client that sends neither — every client that predates
+/// the verbs, idling for hours on a quiet link — is never cut. A Unix-socket connection is never held
 /// to it: its peer cannot vanish without its kernel closing the socket (a dead
 /// process is an EOF, and a dead host took this broker with it), so a deadline there
 /// could only ever cut a live peer that stalled.
@@ -2278,7 +2283,8 @@ impl HelloCopy {
                         | crate::proto::REQUEST_BURST_MARKS
                         | crate::proto::REQUEST_RELAY
                         | crate::proto::REQUEST_SETTLE
-                        | crate::proto::REQUEST_FRESH_PUBLISH,
+                        | crate::proto::REQUEST_FRESH_PUBLISH
+                        | crate::proto::REQUEST_SIGNALS,
                 ),
                 // Never copied: the answer reads it fresh from the vitals
                 // (`hello_health`), since it moves with every batch's flush.
@@ -2474,6 +2480,22 @@ struct Shared {
     /// test installs one; not in a build that is not a test.
     #[cfg(test)]
     tail_pause: Mutex<Option<TailPause>>,
+    /// THE SIGNALS ([`Request::Signal`]): the newest value of each signalled subject, in
+    /// memory only, each row owned by the connection that put it and dropped when that
+    /// connection ends ([`ConnGuard`]). A pure leaf lock: never held with the log lock or
+    /// any other, nor across a socket write; the one wait under it is a signal stream's
+    /// park on `signals_cv`.
+    signals: Mutex<signal_serve::Signals>,
+    /// Wakes the signal streams parked on `signals`: a put that changed a row, a
+    /// revocation, a stop ([`notify_all_tails`]).
+    signals_cv: Condvar,
+    /// The `revocation_epoch` the signals were last swept at
+    /// (`signal_serve::sweep_revoked_signals`).
+    signals_swept: AtomicU64,
+    /// TEST SEAM (`signal_serve::SignalPause`): taken by the next signal stream to start.
+    /// `None` unless a unit test installs one; not in a build that is not a Unix test.
+    #[cfg(all(test, unix))]
+    signal_pause: Mutex<Option<signal_serve::SignalPause>>,
     /// Direct-mapped cache only for immutable live `Response::Delivery` payloads.
     /// Each slot keeps the full 64-bit offset and CRC under one short lock; a fork's
     /// counterfactual delivery never enters this cache. No offset bit is a valid flag.
@@ -4006,6 +4028,9 @@ impl Drop for ConnGuard<'_> {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&self.id);
+        // Nothing of a signal outlives its producer's session: every row this connection
+        // still owns goes with it, on every transport and every way a connection ends.
+        signal_serve::drop_conn_signals(self.shared, self.id);
         if self.fences_gaps.get() {
             // The pipeline is declared after this guard, so its held run reaches this same
             // queue first on every return from `serve_conn`. Clear the connection's fences
@@ -4723,7 +4748,7 @@ impl Broker {
     /// any producer bindings (`/a/bind`), active pending wills (`/a/will`), producer
     /// sequence fences, and consumer-group commit watermarks from the dropped prefix
     /// into the `<log>.state` sidecar so compaction succeeds past early bindings and
-    /// wills (`ROADMAP.md`, `AUDIT-2026-09.md`).
+    /// wills.
     ///
     /// Off the ack path, crash-safe, waits for a batch in flight, and is refused above the
     /// subscriber-visible head, as [`retain_before`](Self::retain_before) does and is.
@@ -5036,8 +5061,14 @@ impl Broker {
                 st.has_unread_match = true;
                 p.needs_wake.store(true, Ordering::Release);
             }
+            drop(parkers);
+            // Notify while still holding the log lock. Every tail waits on a condvar
+            // bound to that lock, so none woken through `shared.tail` can return from
+            // its wait, see the new mode and re-park on its own `parker.cv` before this
+            // reaches that condvar too, which would wake it a second time. Each parked
+            // tail then resumes exactly once per toggle.
+            notify_all_tails(&self.shared);
         }
-        notify_all_tails(&self.shared);
     }
 
     /// Whether filter-indexed selective subscriber tail wakeups are currently active.
@@ -5473,6 +5504,11 @@ impl Broker {
             last_round_pause: Mutex::new(None),
             #[cfg(test)]
             tail_pause: Mutex::new(None),
+            signals: Mutex::new(signal_serve::Signals::new()),
+            signals_cv: Condvar::new(),
+            signals_swept: AtomicU64::new(0),
+            #[cfg(all(test, unix))]
+            signal_pause: Mutex::new(None),
             delivery_crc_cache: Box::new(std::array::from_fn(|_| Mutex::new(None))),
             hello: Mutex::new(hello),
             bindings: Mutex::new(bindings),
@@ -6467,11 +6503,13 @@ impl Broker {
         );
     }
 
-    /// Override how long a TCP connection that keeps alive may go with nothing read
-    /// from it before the broker ends it, firing its will (default
-    /// [`KEEPALIVE_DEADLINE`], 60 s). Keep it a few times the interval clients keep
-    /// alive at ([`KEEPALIVE_INTERVAL`]): shorter than that cuts live clients. Applies
-    /// to connections whose first [`Request::Keepalive`] arrives after the call.
+    /// Override how long a TCP connection that keeps alive, or that signalled a value
+    /// the broker keeps, may go with nothing read from it before the broker ends it,
+    /// firing its will and dropping its signals (default [`KEEPALIVE_DEADLINE`], 60 s).
+    /// Keep it a few times the interval clients keep alive at ([`KEEPALIVE_INTERVAL`]):
+    /// shorter than that cuts live clients. The value is read each time a
+    /// [`Request::Keepalive`] or a kept [`Request::Signal`] arms the deadline, so it
+    /// applies to a connection from the next one of either it sends after the call.
     pub fn set_keepalive_deadline(&self, deadline: Duration) {
         self.shared.keepalive_deadline_ms.store(
             deadline.as_millis().clamp(1, u64::MAX as u128) as u64,
@@ -6870,8 +6908,8 @@ impl Broker {
         self.serve_tcp_with(addr, TcpWrap::Handshake(psk))
     }
 
-    /// Serve this broker over **zero-gap AEAD-over-UDP connection migration** (`AROM` v1;
-    /// `docs/ROADMAP.md` §1) authenticated by `psk` with per-session ephemeral X25519
+    /// Serve this broker over **zero-gap AEAD-over-UDP connection migration** (`AROM` v1)
+    /// authenticated by `psk` with per-session ephemeral X25519
     /// forward secrecy, stateless HMAC `PKT_RETRY` source-address cookies, immutable 8-byte
     /// Connection IDs, and RFC 9000 §8.2 `PATH_CHALLENGE` / `PATH_RESPONSE` + 3x
     /// anti-amplification path validation.
@@ -7809,8 +7847,9 @@ impl Drop for BrokerHandle {
 }
 
 /// Which listener accepted a connection: what decides whether a [`Request::Keepalive`]
-/// holds it to [`KEEPALIVE_DEADLINE`] (TCP, sealed or not) or to nothing (a Unix
-/// socket, whose peer cannot vanish without its kernel closing it).
+/// (or a kept [`Request::Signal`]) holds it to [`KEEPALIVE_DEADLINE`] (TCP, sealed or
+/// not) or to nothing (a Unix socket, whose peer cannot vanish without its kernel
+/// closing it).
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Wire {
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -9042,6 +9081,49 @@ fn dispatch_request(
             write_frame(stream, &encode_response(&mark_at_head(shared)))?;
             Ok(true)
         }
+        Request::Signal {
+            producer_id,
+            seq,
+            subject,
+            body,
+        } => signal_serve::serve_signal(
+            shared,
+            stream,
+            pipe,
+            wire,
+            conn_id,
+            peer,
+            until,
+            signal_serve::SignalPut {
+                producer_id,
+                seq,
+                subject,
+                body,
+            },
+        ),
+        Request::SubscribeSignals { filter } => {
+            finish_pipe(pipe)?; // flush pending acks, reclaim the socket
+            let filt = match Filter::new(filter.as_str()) {
+                Ok(f) => f,
+                Err(_) => {
+                    write_frame(
+                        stream,
+                        &encode_response(&Response::Error {
+                            code: ERR_BAD_FILTER,
+                            msg: format!("bad filter {filter:?}"),
+                        }),
+                    )?;
+                    return Ok(false);
+                }
+            };
+            #[cfg(feature = "cap")]
+            let cap_check =
+                StreamCapCheck::new(shared, keyring, Request::SubscribeSignals { filter });
+            #[cfg(not(feature = "cap"))]
+            let cap_check = StreamCapCheck::new(shared);
+            signal_serve::signal_loop(shared, stream, filt, until, peer, cap_check)?;
+            Ok(false)
+        }
         Request::Stats { filter } => serve_stats(shared, stream, pipe, filter),
         Request::Budget { producer_id } => {
             // Answered in the request loop after the pending acks, so a count read
@@ -10160,9 +10242,9 @@ fn ungranted(
 /// An empty ring authorizes nothing.
 ///
 /// The answer is `None` when `req` is not authorized at `now_ms`, else the unix-ms
-/// instant its authority LAPSES. That instant matters to a streaming verb or `Will` —
-/// whose authority must still hold when the stream delivers or the connection drops —
-/// so those verbs compute it: each half of the request rests on whichever authorizing
+/// instant its authority LAPSES. That instant matters to a streaming verb, a `Will` or a
+/// `Signal` — whose authority must still hold when the stream delivers, the connection
+/// drops or the signal's value is handed to a reader — so those verbs compute it: each half of the request rests on whichever authorizing
 /// grant lasts longest, and the request lapses with the first half to go. Any other
 /// verb stops at the first grant that authorizes it and answers `u64::MAX` ("authorized
 /// now"), which is also the answer for grants without an expiry.
@@ -10219,6 +10301,8 @@ fn cap_authorized_until(
             | Request::SubscribeGroup { .. }
             | Request::ForkSubscribe { .. }
             | Request::Will { .. }
+            | Request::Signal { .. }
+            | Request::SubscribeSignals { .. }
     );
     let (first, second): (CapPred<'_>, Option<CapPred<'_>>) = match req {
         // A `Will` is a publish the broker will make LATER on this connection's
@@ -10273,6 +10357,14 @@ fn cap_authorized_until(
             subject,
             producer_id,
             ..
+        }
+        // A signal is a publish that appends nothing: authorized as one, and, like a
+        // `Will`, held past the request, so its authority's lapse is computed and kept
+        // with the row.
+        | Request::Signal {
+            subject,
+            producer_id,
+            ..
         } => (CapPred::Publish(subject, *producer_id), None),
         Request::Relay {
             subject,
@@ -10316,6 +10408,7 @@ fn cap_authorized_until(
         },
         Request::Subscribe { filter, .. }
         | Request::ForkSubscribe { filter, .. }
+        | Request::SubscribeSignals { filter }
         | Request::Last { filter, .. }
         | Request::Fetch { filter, .. } => (CapPred::Read(filter), None),
         // Operator status (`REQUIREMENTS` R5) exposes broker-wide producers, listeners,
@@ -10436,8 +10529,10 @@ fn oversized_name(req: &Request) -> Option<String> {
         | Request::FreshPublish { subject, .. }
         | Request::Relay { subject, .. }
         | Request::Will { subject, .. }
+        | Request::Signal { subject, .. }
         | Request::Retire { subject, .. } => [("subject", subject), NONE],
         Request::Subscribe { filter, .. }
+        | Request::SubscribeSignals { filter }
         | Request::Fetch { filter, .. }
         | Request::Stats { filter } => [("filter", filter), NONE],
         Request::ForkSubscribe {
@@ -10980,7 +11075,7 @@ fn finish_writer_batch(
 /// THE ORDERED HORIZON lives here, on the one thread that appends. A full flush issued
 /// from any other thread would usually make the writer's next `write()` wait behind it,
 /// and its barrier too. Measured on one Mac (APFS, macOS 27.0.1,
-/// 2026-10-21; aterm `docs/measured/flush-wait-2026-10-21.md`): while an `F_FULLFSYNC`
+/// 2026-10-21, by a probe aterm ran): while an `F_FULLFSYNC`
 /// from another thread of the process was in flight, every `F_BARRIERFSYNC` the probe
 /// caught waited for it to end (992 of 992, on the flushed file and two others), and so
 /// did 72-99% of the `fsync(2)`s, growing appends, creates and renames caught in the
@@ -11315,10 +11410,13 @@ fn fire_tail_wakes(shared: &Shared, plan: WakePlan) {
 }
 
 /// Wake every parked subscriber tail across both broadcast (`shared.tail`) and
-/// selective (`shared.tail_parkers`) condvars (used for shutdown, revocations, and
-/// live mode switches).
+/// selective (`shared.tail_parkers`) condvars, and every parked signal stream
+/// (`shared.signals_cv`): used for shutdown, revocations, and live mode switches. The
+/// signal streams are notified without their lock held, so one about to park can miss the
+/// wake; it parks for at most one liveness poll.
 fn notify_all_tails(shared: &Shared) {
     shared.tail.notify_all();
+    shared.signals_cv.notify_all();
     let parkers = shared
         .tail_parkers
         .lock()

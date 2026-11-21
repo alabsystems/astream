@@ -2,13 +2,13 @@
 // Copyright 2026 Andrew Yates
 
 //! Pure-Rust Classic BPF (`sock_filter`) compiler, monotone-DAG verifier, VM
-//! evaluator, and replay syscall neutralizer (`docs/ROADMAP.md` Foreign-Process
-//! Replay Hardening).
+//! evaluator, and replay syscall neutralizer for foreign-process
+//! replay hardening.
 //!
 //! `astream-host::foreign` intercepts syscalls via `ptrace(PTRACE_SYSCALL)`,
 //! which traps on every syscall entry and exit and still lets the kernel execute
 //! intercepted syscalls during replay before overwriting return registers.
-//! Hardening foreign-process record/replay (`docs/ROADMAP.md` §3) requires two
+//! Hardening foreign-process record/replay requires two
 //! deterministic, cross-platform-verifiable components:
 //! 1. **Selective `seccomp-bpf` filter synthesis** ([`SeccompPolicy`],
 //!    [`compile_seccomp_policy`], [`verify_bpf_program`], [`eval_bpf_program`]):

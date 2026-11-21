@@ -186,8 +186,14 @@ fn a_check_writes_nothing_where_an_open_closed_at_once_rewrites_the_identity() {
 }
 
 /// What an open refuses the check refuses, by the open's kind, and the folder is as it was:
-/// no log (and none is made), a folder (which no read-write open takes), a log another open
-/// holds, a corrupt record.
+/// no log (and none is made), a folder (which no read-write open takes, `IsADirectory` on
+/// every host), a log another open holds, a corrupt record (which, after a run the open
+/// judges unclean, both cut as the open would instead). Which of the two a corrupt record
+/// meets is the host's, read here as the open reads it: refused where the host names its boot
+/// and the log is on the boot volume, cut where it does not (Windows, which names neither).
+/// NEGATIVE CONTROL (run on Linux 2026-11-19, then restored): `Boot::Detect` resolving to no
+/// boot (as on a host that names none) fails "a host that names its boot refuses the record":
+/// the open cuts it.
 #[test]
 fn a_check_refuses_what_an_open_refuses_and_changes_nothing() {
     let fx = Fx::new("check-open-none");
@@ -213,12 +219,60 @@ fn a_check_refuses_what_an_open_refuses_and_changes_nothing() {
         assert_eq!(fx.files(), before, "{key:?}");
         drop(holder);
 
+        // The seed's last run served Relaxed and was killed. An open in the same boot, with
+        // the log on the boot volume, finds no reason that run lost an ack and refuses the
+        // record; one that cannot say so (a host that names no boot, Windows) judges the
+        // run unclean, keeps the longest intact prefix, as a power loss's hole, and cuts
+        // the rest. Either way the check answers as the open does.
         let fx = Fx::new("check-open-corrupt");
         seed(&fx, key);
-        let mut bytes = std::fs::read(&fx.path).unwrap();
-        let mid = bytes.len() / 2;
-        bytes[mid] ^= 0xff;
-        std::fs::write(&fx.path, &bytes).unwrap();
+        flip_a_middle_byte(&fx);
+        let same_boot = astream_sys::boot_session().is_some()
+            && std::fs::File::open(&fx.path).is_ok_and(|log| crate::store::on_boot_volume(&log));
+        let before = fx.files();
+        let checked = BrokerLog::check_open(&fx.path, key);
+        assert_eq!(fx.files(), before, "{key:?}");
+        assert_eq!(
+            checked.is_err(),
+            same_boot,
+            "{key:?}: a host that names its boot refuses the record, one that cannot cuts it: \
+             {checked:?}"
+        );
+        match checked {
+            Err(corrupt) => {
+                assert_eq!(
+                    corrupt.kind(),
+                    io::ErrorKind::InvalidData,
+                    "{key:?}: {corrupt}"
+                );
+                assert_eq!(
+                    corrupt.to_string(),
+                    fx.refused(key).to_string(),
+                    "{key:?}: the open's own refusal"
+                );
+            }
+            Ok(OpenCheck::Opens { base, head, torn }) => {
+                let len = fx.len();
+                let log = fx.open(key, Durability::Strict).unwrap();
+                assert_eq!((log.base(), log.head()), (base, head), "{key:?}");
+                drop(log);
+                assert_eq!(
+                    fx.len(),
+                    len - torn,
+                    "{key:?}: the open cut what the check counted"
+                );
+            }
+            Ok(other) => panic!("{key:?}: a corrupt record is no interrupted step: {other:?}"),
+        }
+
+        // A corrupt record below the floor a clean close raised to the head is no stop's
+        // hole: every open refuses it, on every host, and so does the check.
+        let fx = Fx::new("check-open-corrupt-closed");
+        seed(&fx, key);
+        let mut log = fx.open(key, Durability::Strict).unwrap();
+        log.close_clean().unwrap();
+        drop(log);
+        flip_a_middle_byte(&fx);
         let before = fx.files();
         let corrupt = BrokerLog::check_open(&fx.path, key).unwrap_err();
         assert_eq!(
@@ -234,6 +288,14 @@ fn a_check_refuses_what_an_open_refuses_and_changes_nothing() {
             "{key:?}: the open's own refusal"
         );
     }
+}
+
+/// Flip every bit of the byte in the middle of the log.
+fn flip_a_middle_byte(fx: &Fx) {
+    let mut bytes = std::fs::read(&fx.path).unwrap();
+    let mid = bytes.len() / 2;
+    bytes[mid] ^= 0xff;
+    std::fs::write(&fx.path, &bytes).unwrap();
 }
 
 /// A LOG OR A HELD STORE THE OPEN COULD NOT OPEN FOR WRITING is refused as the open refuses

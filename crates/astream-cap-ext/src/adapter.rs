@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Closed-vocabulary agent hook-event normalizer and lease-fenced task-queue adapter
-//! (`docs/ROADMAP.md` "vendor-specific agent hooks / task-queue adapters";
-//! `docs/DESIGN-drive-pipe.md` §5; `docs/DESIGN-aterm-fabric.md` §8.4).
+//! Closed-vocabulary agent hook-event normalizer and lease-fenced task-queue adapter for
+//! vendor-specific agent hooks and task queues
+//! (`docs/DESIGN-drive-pipe.md` §5; `docs/DESIGN-aterm-fabric.md` §8.4).
 //!
 //! Rebuilds every untrusted vendor hook payload (`ClaudeCode`, `Codex`, `Agy`, `Generic`)
 //! from a strict closed vocabulary ([`AgentVendor`], [`HookPhase`], [`TurnDisposition`]) so

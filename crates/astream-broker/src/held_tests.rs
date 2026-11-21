@@ -1872,3 +1872,37 @@ fn a_look_that_tells_nothing_leaves_the_range_still_owed() {
     );
     assert_eq!(log.gap_notice(&mail, M, &mut told), None, "told once");
 }
+
+/// A CLASS HELD BACK BY A SEGMENT'S FLOOR KEEPS ITS SLACK: a segmented log whose records are
+/// all in one segment cuts nothing (the floor is the base), so the stream class stays past its
+/// bytes above the cut; the planning treats the floor as a cap, as the visible head is, and
+/// leaves the class the slack a held-back cut gets, so the next batch is due no tick.
+///
+/// NEGATIVE CONTROL, run once and restored (2026-11-19): a planning again at the floor with the
+/// floor as the cut asked for leaves the class a room of 0 and fails: "the next stream batch
+/// asks for no tick".
+#[test]
+fn a_class_held_back_by_a_segment_floor_keeps_its_slack() {
+    use crate::segments::SegmentBytes;
+    use crate::store::{Durability, OpenOptions};
+    let mut fx = Fx::new("held-seg-floor", false);
+    let opts =
+        OpenOptions::new(Durability::Strict).with_segment_bytes(SegmentBytes::exactly(1 << 20));
+    let mut log = BrokerLog::open_opts(&fx.path, opts, BrokerLog::prepare_nothing).unwrap();
+    log.set_retention(rules(Some(8 * rb(EV)), None, None, 7 * DAY, false))
+        .unwrap();
+    for _ in 0..20 {
+        fx.batch(&mut log, &[EV]);
+    }
+    let tick = log.retain_by_rules(T0).unwrap();
+    assert_eq!(
+        tick.base, 0,
+        "the floor is the base: one segment holds every record"
+    );
+    assert!(!log.retention_due(), "planned");
+    fx.batch(&mut log, &[EV]);
+    assert!(
+        !log.retention_due(),
+        "the next stream batch asks for no tick"
+    );
+}

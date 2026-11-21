@@ -4,7 +4,7 @@
 //! End-to-end hermetic verification of a nested Claude-Code-protocol TUI session driven
 //! over a real PTY (`astream-host::Pty` + `Driver`), `astream-broker`, and
 //! `aspump --profile claude --group --task-subject --hook-unix --hook-format claude-stop --meta`
-//! (`docs/ROADMAP.md` §5, `Astream.Pump.TlaNestedDrive`).
+//! (`Astream.Pump.TlaNestedDrive`).
 
 #[cfg(unix)]
 mod unix_tests {

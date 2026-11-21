@@ -128,6 +128,17 @@
 //! [`Escalation`](crate::Escalation)) never needs any of these to be safe: the broker
 //! holds the visible head at it until its full flush has succeeded, so no reader is ever
 //! delivered, and no producer acked, an escalated record that a power loss can take.
+//!
+//! # Signals
+//!
+//! One plane of the wire is NOT the log: a SIGNAL ([`Request::Signal`], `0x1B`) is a
+//! volatile last-value publish. The broker keeps the newest value of each signalled subject
+//! in memory, for as long as the connection that sent it lasts, and appends nothing: no
+//! `Fetch`, `Last`, `Subscribe`, replication link or bridge ever carries one. A reader asks
+//! for them by their own verb ([`Request::SubscribeSignals`], `0x1C`) and is sent
+//! [`Response::Signal`] frames (`0x89`), the current values first. Hello's request set
+//! announces the pair ([`REQUEST_SIGNALS`]); a broker that predates them refuses either as
+//! malformed and keeps the connection.
 
 use astream_wire::frame::{MAGIC as FRAME_MAGIC, VERSION as FRAME_VERSION};
 use astream_wire::{crc32_ieee, Frame, FrameError, HEADER_SIZE, MAX_PAYLOAD_LEN};
@@ -373,6 +384,8 @@ const TAG_RELAY: u8 = 0x17;
 const TAG_ORIGIN_STAMPS: u8 = 0x18;
 const TAG_SETTLE: u8 = 0x19;
 const TAG_FRESH_PUBLISH: u8 = 0x1A;
+const TAG_SIGNAL: u8 = 0x1B;
+const TAG_SUBSCRIBE_SIGNALS: u8 = 0x1C;
 const TAG_ACK: u8 = 0x81;
 const TAG_DELIVERY: u8 = 0x82;
 const TAG_ERROR: u8 = 0x83;
@@ -381,6 +394,7 @@ const TAG_NONCE: u8 = 0x85;
 const TAG_BUDGET_REPLY: u8 = 0x86;
 const TAG_GAP: u8 = 0x87;
 const TAG_STATS_RESP: u8 = 0x88;
+const TAG_SIGNAL_DELIVERY: u8 = 0x89;
 
 /// Whether a payload names the fresh-publish opcode in this protocol, even when its remaining
 /// fields are malformed. Used to order a decoding refusal with this connection's fresh writes.
@@ -449,6 +463,12 @@ pub const REQUEST_SETTLE: u64 = 1 << 8;
 /// requests already staged in that batch follow their own commit outcomes. The fence lasts until
 /// reconnect, independently of the optional gap-fence setting. Ordinary `Publish` is unchanged.
 pub const REQUEST_FRESH_PUBLISH: u64 = 1 << 9;
+
+/// Bit 10 of [`NonceExt::requests`]: the broker accepts [`Request::Signal`] (`0x1B`) and
+/// [`Request::SubscribeSignals`] (`0x1C`), and sends [`Response::Signal`] (`0x89`) on a
+/// connection that subscribed to them: volatile last-value publishes that append nothing and
+/// are kept only while their producer's connection lasts.
+pub const REQUEST_SIGNALS: u64 = 1 << 10;
 
 const STATS_MAX_ITEMS: usize = 65_536;
 
@@ -750,12 +770,13 @@ pub enum Request {
     /// request/reply peer that vanished without a FIN is noticed at all; the broker
     /// writes to such a connection only to answer it, so silence is all it ever sees.
     ///
-    /// THE FIRST ONE ARMS THE DEADLINE, so a client that never sends one is never
-    /// cut. A Unix-socket connection is answered and never held: its peer cannot
-    /// vanish without its kernel closing the socket. A broker that predates the verb
-    /// answers `Error 5 "malformed request"` and keeps the connection. On a guarded
-    /// broker it needs a capability attached (it grants nothing, but the `Mark` names
-    /// the log's head). A wire frame, never a log record.
+    /// THE FIRST ONE ARMS THE DEADLINE (as does the first [`Signal`](Self::Signal) the
+    /// broker keeps, whose value must not outlive a vanished peer), so a client that
+    /// sends neither is never cut. A Unix-socket connection is answered and never held:
+    /// its peer cannot vanish without its kernel closing the socket. A broker that
+    /// predates the verb answers `Error 5 "malformed request"` and keeps the connection.
+    /// On a guarded broker it needs a capability attached (it grants nothing, but the
+    /// `Mark` names the log's head). A wire frame, never a log record.
     Keepalive,
     /// Opt in to catch-up and idle [`Response::Mark`] frames on this connection's
     /// next `Subscribe` or `SubscribeGroup`. Answered with a `Mark` before the
@@ -906,6 +927,76 @@ pub enum Request {
     ///
     /// [`Broker::flush_durable`]: crate::Broker::flush_durable
     Settle,
+    /// A VOLATILE LAST-VALUE PUBLISH ([`REQUEST_SIGNALS`]): make `body` the current value of
+    /// `subject`, replacing the one before it. NOTHING IS APPENDED: a signal is never a log
+    /// record, has no offset, and is in no `Fetch`, `Last`, `Subscribe`, replication link or
+    /// bridge. The broker holds the newest value of each signalled subject in memory, hands
+    /// it to every [`SubscribeSignals`](Self::SubscribeSignals) stream whose filter matches,
+    /// and drops it when THIS connection ends (or the broker stops): nothing of a signal
+    /// outlives its producer's session. Answered with a [`Response::Mark`], after the
+    /// connection's pending acks, as [`Keepalive`](Self::Keepalive) is.
+    ///
+    /// CONFLATED. A reader is sent each subject's newest value, not every value: one that
+    /// was slow while a subject was overwritten a hundred times reads the hundredth once. A
+    /// put always reaches the readers that are there, an unchanged body included, so a
+    /// producer that republishes on a timer is seen to be alive.
+    ///
+    /// WHOSE VALUE IT IS. The row belongs to the connection that last put it. That
+    /// connection's next signal on the subject replaces it whatever its `seq`. A signal from
+    /// ANOTHER connection under the same `producer_id` replaces it only at a `seq` not below
+    /// the row's, and is otherwise acknowledged and dropped: THE PRODUCER'S OBLIGATION is
+    /// that `seq` never falls from one of its incarnations to the next (aterm: it rises per
+    /// engine start), so the late bytes of an incarnation it left behind cannot shadow the
+    /// one that replaced it. At an EQUAL `seq` the connection the broker accepted later
+    /// holds the row: a producer that reconnects inside one incarnation takes its row with
+    /// its new connection, and the late bytes of the connection it left are acknowledged
+    /// and dropped, so that connection's end cannot remove the value its successor put. A
+    /// producer therefore signals a subject from ONE live connection: from two at one
+    /// `seq`, the older connection's signals are dropped while the newer holds the row.
+    /// Another `producer_id` on the subject is last writer wins.
+    ///
+    /// ON TCP A SIGNAL THE BROKER KEEPS HOLDS THE CONNECTION TO THE KEEPALIVE DEADLINE, as
+    /// a [`Keepalive`](Self::Keepalive) does: a peer that vanished without a FIN would
+    /// otherwise leave its value served until the broker restarts. A producer that signals
+    /// signals again, or keeps alive, inside each deadline. THE DEADLINE BOUNDS THE REQUEST
+    /// LOOP'S READS ONLY: a connection that goes on to send a streaming verb
+    /// ([`Subscribe`](Self::Subscribe), [`SubscribeSignals`](Self::SubscribeSignals) and
+    /// the like) is read no more, so a vanished peer is then noticed only by a stream write
+    /// that fails (never, on a stream that writes nothing), and the values the connection
+    /// owns last as long as its stream. A producer keeps the connection it signals on apart
+    /// from its streams.
+    ///
+    /// Refused: [`ERR_BAD_SUBJECT`]; [`ERR_RECORD_REFUSED`] for a reserved subject (`/a` and
+    /// below) or a body past `MAX_SIGNAL_BODY`; [`ERR_REFUSED`] at a bound of the table (this
+    /// connection's subjects or bytes, the broker's); [`ERR_RATE_LIMITED`] under the
+    /// producer's publish bucket. On a guarded broker it is authorized exactly as a
+    /// [`Publish`](Self::Publish) of `subject` under `producer_id`, and the value is served
+    /// only while that authority holds: not past the grant's expiry, nor a revocation of its
+    /// principal or of the peer's key. A broker that predates the verb answers `Error 5
+    /// "malformed request"` and keeps the connection. A wire frame, never a log record.
+    Signal {
+        producer_id: u64,
+        seq: u64,
+        subject: String,
+        body: Vec<u8>,
+    },
+    /// STREAM THE SIGNALS matching `filter` ([`REQUEST_SIGNALS`]): the current value of
+    /// every matching subject first, then a [`Response::Mark`], then each change as it is
+    /// put ([`Response::Signal`]), newest value only, with a `Mark` after every idle-mark
+    /// interval in which nothing was sent. Terminal, as [`Subscribe`](Self::Subscribe) is:
+    /// the connection becomes the stream. It delivers no log record, and a log subscription
+    /// delivers no signal. A value's producer ending its session is not told: the value
+    /// simply stops being republished, and a reader ages it out by its own clock. A SIGNAL
+    /// CARRIES NO AGE: the values sent before the first `Mark` are whatever the broker held
+    /// when the stream began, put at any time before it, so a reader that ages values from
+    /// their arrival holds those unconfirmed until their producer's next put; every signal
+    /// after that `Mark` is a put made while the stream was there.
+    ///
+    /// On a guarded broker it needs a grant that contains `filter`, as `Subscribe` does, and
+    /// the stream ends when that grant lapses or is revoked. Refused [`ERR_BAD_FILTER`]. A
+    /// broker that predates the verb answers `Error 5 "malformed request"` and keeps the
+    /// connection.
+    SubscribeSignals { filter: String },
 }
 
 /// Per-connection attached producer row in [`WireStats`] (`REQUIREMENTS` R5).
@@ -1115,6 +1206,16 @@ pub enum Response {
     /// The answer to [`Request::Stats`] (`REQUIREMENTS` R5): operational broker, producer,
     /// face-prefix, and disk telemetry with zero record bodies.
     Stats(WireStats),
+    /// ONE SIGNAL on a [`Request::SubscribeSignals`] stream: `subject`'s newest value, as
+    /// its producer put it ([`Request::Signal`]) under `(producer_id, seq)`. It has no
+    /// offset: it is no log record. The body is `producer_id u64, seq u64`, the subject and
+    /// the body; bytes after it are a later build's, skipped. Sent on no other stream.
+    Signal {
+        producer_id: u64,
+        seq: u64,
+        subject: String,
+        body: Vec<u8>,
+    },
 }
 
 impl PartialEq for Response {
@@ -1200,6 +1301,25 @@ impl PartialEq for Response {
             ) => *a_s == *b_s && *a_r == *b_r && *a_m == *b_m,
             (Response::Gap(a), Response::Gap(b)) => a == b,
             (Response::Stats(a), Response::Stats(b)) => a == b,
+            (
+                Response::Signal {
+                    producer_id: a_p,
+                    seq: a_q,
+                    subject: a_s,
+                    body: a_b,
+                },
+                Response::Signal {
+                    producer_id: b_p,
+                    seq: b_q,
+                    subject: b_s,
+                    body: b_b,
+                },
+            ) => {
+                *a_p == *b_p
+                    && *a_q == *b_q
+                    && a_s.as_str() == b_s.as_str()
+                    && a_b.as_slice() == b_b.as_slice()
+            }
             _ => false,
         }
     }
@@ -1448,7 +1568,7 @@ const fn take_ext_entry_header(b: &[u8]) -> Option<(u8, usize, &[u8])> {
 /// |------|------------|-------|
 /// | 0x01 | durability | `requested u8, served u8, reason u8, horizon_ms u32 LE, rules u16 LE` ([`ServedInfo`]) |
 /// | 0x02 | lineage    | `n u8`, then `n × (generation u64 LE, common u64 LE)` ([`Lineage`]) |
-/// | 0x03 | 8 bytes    | the request set a broker announces (`u64` LE bitmask; bit 0 = [`REQUEST_RETIRE`], bit 1 = [`REQUEST_GAP_NOTICES`], bit 2 = [`REQUEST_TOLD_FETCH`], bit 3 = [`REQUEST_BROKER_TIMES`], bit 4 = [`REQUEST_STATS`], bit 5 = [`REQUEST_GAP_FENCES`], bit 6 = [`REQUEST_BURST_MARKS`], bit 7 = [`REQUEST_RELAY`], bit 8 = [`REQUEST_SETTLE`], bit 9 = [`REQUEST_FRESH_PUBLISH`]) |
+/// | 0x03 | 8 bytes    | the request set a broker announces (`u64` LE bitmask; bit 0 = [`REQUEST_RETIRE`], bit 1 = [`REQUEST_GAP_NOTICES`], bit 2 = [`REQUEST_TOLD_FETCH`], bit 3 = [`REQUEST_BROKER_TIMES`], bit 4 = [`REQUEST_STATS`], bit 5 = [`REQUEST_GAP_FENCES`], bit 6 = [`REQUEST_BURST_MARKS`], bit 7 = [`REQUEST_RELAY`], bit 8 = [`REQUEST_SETTLE`], bit 9 = [`REQUEST_FRESH_PUBLISH`], bit 10 = [`REQUEST_SIGNALS`]) |
 /// | 0x04 | health     | `flags u8` (bit 0: poisoned), `barrier u64 LE, full u64 LE, skipped u64 LE, failed u64 LE`, `n u16 LE`, `n` bytes of the poison's reason (UTF-8); bytes after it are a later build's, skipped ([`HelloHealth`]) |
 /// | 0x05 | retention  | the rules the log is retained by, as `Retention::encode` writes them (the `retention` feature) |
 /// | 0x06 | device     | `dev u64 LE` (the log file's `st_dev`), `flags u8` (bit 0: its full flush drains the device); bytes after it are a later build's, skipped ([`LogDevice`]) |
@@ -1468,7 +1588,8 @@ pub struct NonceExt {
     /// Tag 0x03: the request-set bitmask announced by the broker (bit 0 = [`REQUEST_RETIRE`],
     /// bit 1 = [`REQUEST_GAP_NOTICES`], bit 2 = [`REQUEST_TOLD_FETCH`], bit 3 = [`REQUEST_BROKER_TIMES`],
     /// bit 4 = [`REQUEST_STATS`], bit 5 = [`REQUEST_GAP_FENCES`], bit 6 = [`REQUEST_BURST_MARKS`],
-    /// bit 7 = [`REQUEST_RELAY`], bit 8 = [`REQUEST_SETTLE`]).
+    /// bit 7 = [`REQUEST_RELAY`], bit 8 = [`REQUEST_SETTLE`], bit 9 = [`REQUEST_FRESH_PUBLISH`],
+    /// bit 10 = [`REQUEST_SIGNALS`]).
     pub requests: Option<u64>,
     /// Tag 0x04: whether the log is poisoned, and the flushes it has issued.
     pub health: Option<HelloHealth>,
@@ -1726,6 +1847,16 @@ impl NonceExt {
     pub const fn supports_fresh_publish(&self) -> bool {
         match self.requests {
             Some(r) => (r & REQUEST_FRESH_PUBLISH) != 0,
+            None => false,
+        }
+    }
+
+    /// Whether this `Hello` extension block announces signals ([`Request::Signal`], `0x1B`,
+    /// and [`Request::SubscribeSignals`], `0x1C`): [`REQUEST_SIGNALS`].
+    #[must_use]
+    pub const fn supports_signals(&self) -> bool {
+        match self.requests {
+            Some(r) => (r & REQUEST_SIGNALS) != 0,
             None => false,
         }
     }
@@ -2201,6 +2332,22 @@ pub fn encode_request(req: &Request) -> Vec<u8> {
         Request::ClearGapFences => p[1] = TAG_CLEAR_GAP_FENCES,
         Request::FenceGaps => p[1] = TAG_FENCE_GAPS,
         Request::Settle => p[1] = TAG_SETTLE,
+        Request::Signal {
+            producer_id,
+            seq,
+            subject,
+            body,
+        } => {
+            p[1] = TAG_SIGNAL;
+            p.extend_from_slice(&encode_u64_le_bytes(*producer_id));
+            p.extend_from_slice(&encode_u64_le_bytes(*seq));
+            put_str(&mut p, subject);
+            put_bytes(&mut p, body);
+        }
+        Request::SubscribeSignals { filter } => {
+            p[1] = TAG_SUBSCRIBE_SIGNALS;
+            put_str(&mut p, filter);
+        }
         Request::Stats { filter } => {
             p[1] = TAG_STATS;
             put_str(&mut p, filter);
@@ -2413,6 +2560,15 @@ pub(crate) fn decode_request_with_bt(p: &[u8]) -> Option<(Request, Option<u64>)>
         TAG_CLEAR_GAP_FENCES => Request::ClearGapFences,
         TAG_FENCE_GAPS => Request::FenceGaps,
         TAG_SETTLE => Request::Settle,
+        TAG_SIGNAL => Request::Signal {
+            producer_id: r.u64()?,
+            seq: r.u64()?,
+            subject: r.string()?,
+            body: r.bytes()?,
+        },
+        TAG_SUBSCRIBE_SIGNALS => Request::SubscribeSignals {
+            filter: r.string()?,
+        },
         TAG_STATS => Request::Stats {
             filter: r.string()?,
         },
@@ -2578,7 +2734,32 @@ pub fn encode_response(resp: &Response) -> Vec<u8> {
             p[1] = TAG_STATS_RESP;
             put_wire_stats(&mut p, s);
         }
+        Response::Signal {
+            producer_id,
+            seq,
+            subject,
+            body,
+        } => {
+            p.clear();
+            put_keyed(
+                &mut p,
+                TAG_SIGNAL_DELIVERY,
+                *producer_id,
+                *seq,
+                subject,
+                body,
+            );
+        }
     }
+    p
+}
+
+/// Encode a `Signal` delivery payload directly from BORROWED fields: a signal stream reads
+/// the table's shared rows by reference. Byte-identical to
+/// `encode_response(&Response::Signal { producer_id, seq, subject, body })`.
+pub fn encode_signal(producer_id: u64, seq: u64, subject: &str, body: &[u8]) -> Vec<u8> {
+    let mut p = Vec::new();
+    put_keyed(&mut p, TAG_SIGNAL_DELIVERY, producer_id, seq, subject, body);
     p
 }
 
@@ -3028,6 +3209,13 @@ pub fn decode_response_with_bt(p: &[u8]) -> Option<(Response, Option<u64>)> {
             Response::Gap(Gap { from, to, records })
         }
         TAG_STATS_RESP => Response::Stats(decode_wire_stats(&mut r)?),
+        // Bytes after the body are a later build's trailer, skipped.
+        TAG_SIGNAL_DELIVERY => Response::Signal {
+            producer_id: r.u64()?,
+            seq: r.u64()?,
+            subject: r.string()?,
+            body: r.bytes()?,
+        },
         _ => return None,
     };
     Some((resp, None))
@@ -3485,15 +3673,17 @@ mod tests {
     /// retention gave up, broker-stamped wall times (`bt=`), read-grant-gated operator
     /// `Stats`, a gap fence a connection asks for and its producer lifts once it read its
     /// answers, burst marks, relayed records and their origin stamps, and a settle of the
-    /// log's device and conditional fresh publishes — rides on TWENTY-SIX request tags and EIGHT response tags. This test is
+    /// log's device, conditional fresh publishes and volatile signals with their stream — rides on
+    /// TWENTY-EIGHT request tags and NINE response tags. This test is
     /// the budget: it enumerates every byte and fails if an undeclared request tag or a
-    /// ninth response tag ever decodes, and it pins each tag's NUMBER, so a renumbering that
+    /// tenth response tag ever decodes, and it pins each tag's NUMBER, so a renumbering that
     /// would silently re-interpret an old client's frames breaks the build instead.
     /// `Keepalive` at 0x0D, `IdleMarks` at 0x0E, `Budget` at 0x0F, `Retire` at 0x10,
     /// `GapNotices` at 0x11, `BrokerTimes` at 0x12, `Stats` at 0x13, `ClearGapFences` at
     /// 0x14, `FenceGaps` at 0x15, `BurstMarks` at 0x16, `Relay` at 0x17, `OriginStamps` at 0x18,
-    /// `Settle` at 0x19, `FreshPublish` at 0x1A, `Budget`'s reply at 0x86, `Gap` at 0x87 and `Stats` reply
-    /// at 0x88 took numbers no earlier version
+    /// `Settle` at 0x19, `FreshPublish` at 0x1A, `Signal` at 0x1B, `SubscribeSignals` at 0x1C,
+    /// `Budget`'s reply at 0x86, `Gap` at 0x87, `Stats` reply at 0x88 and a signal's delivery
+    /// at 0x89 took numbers no earlier version
     /// decoded: an older broker refuses each request as malformed and keeps the connection,
     /// and never sends the reply. Additions, not reinterpretations; no version change.
     #[test]
@@ -3524,7 +3714,7 @@ mod tests {
     }
 
     #[test]
-    fn the_tag_budget_is_the_declared_requests_and_eight_responses() {
+    fn the_tag_budget_is_the_declared_requests_and_nine_responses() {
         // Version 2: `Attach` kept its tag (0x07) and its wire SHAPE (a str then a
         // byte string) while its MEANING changed (`{grant, proof}`, answered with a
         // Mark), so under an unchanged version byte a version-1 Attach would decode
@@ -3542,7 +3732,7 @@ mod tests {
         );
 
         // Every tag's NUMBER, pinned against the variant that carries it.
-        let request_tags: [(u8, Request); 26] = [
+        let request_tags: [(u8, Request); 28] = [
             (
                 0x01,
                 Request::Publish {
@@ -3684,6 +3874,21 @@ mod tests {
                     body: Vec::new(),
                 },
             ),
+            (
+                0x1B,
+                Request::Signal {
+                    producer_id: 0,
+                    seq: 0,
+                    subject: String::new(),
+                    body: Vec::new(),
+                },
+            ),
+            (
+                0x1C,
+                Request::SubscribeSignals {
+                    filter: String::new(),
+                },
+            ),
         ];
         for (tag, req) in &request_tags {
             let bytes = encode_request(req);
@@ -3695,7 +3900,7 @@ mod tests {
             );
         }
 
-        let response_tags: [(u8, Response); 8] = [
+        let response_tags: [(u8, Response); 9] = [
             (
                 0x81,
                 Response::PublishAck {
@@ -3753,6 +3958,15 @@ mod tests {
                 }),
             ),
             (0x88, Response::Stats(WireStats::default())),
+            (
+                0x89,
+                Response::Signal {
+                    producer_id: 0,
+                    seq: 0,
+                    subject: String::new(),
+                    body: Vec::new(),
+                },
+            ),
         ];
         for (tag, resp) in &response_tags {
             let bytes = encode_response(resp);
@@ -3790,7 +4004,7 @@ mod tests {
         );
         assert_eq!(
             decodable_responses, declared_responses,
-            "exactly eight response tags decode, and no other byte does"
+            "exactly nine response tags decode, and no other byte does"
         );
 
         // And the version byte still gates every tag, response tags included: the
@@ -3815,6 +4029,64 @@ mod tests {
                 "response tag {tag:#04x} decoded under a wrong version byte"
             );
         }
+    }
+
+    /// A SIGNAL ON THE WIRE (aterm tracker AF-15): the request and its delivery each read back
+    /// as sent, the borrowed encoder a signal stream uses writes the delivery's bytes, a
+    /// delivery cut anywhere before its end is malformed, and a later build's trailer after
+    /// the body is skipped. NC: a delivery that shared the log `Delivery`'s tag would decode
+    /// as a record with an offset, which a signal has none of.
+    #[test]
+    fn a_signal_round_trips_and_its_borrowed_encoder_writes_the_same_bytes() {
+        let req = Request::Signal {
+            producer_id: 7,
+            seq: u64::MAX,
+            subject: "/f/F/pub/n-a/cursor".to_string(),
+            body: b"row".to_vec(),
+        };
+        assert_eq!(decode_request(&encode_request(&req)), Some(req));
+        let sub = Request::SubscribeSignals {
+            filter: "/f/F/pub/>".to_string(),
+        };
+        assert_eq!(decode_request(&encode_request(&sub)), Some(sub));
+
+        let resp = Response::Signal {
+            producer_id: 7,
+            seq: 3,
+            subject: "/f/F/pub/n-a/cursor".to_string(),
+            body: b"row".to_vec(),
+        };
+        let bytes = encode_response(&resp);
+        assert_eq!(bytes, encode_signal(7, 3, "/f/F/pub/n-a/cursor", b"row"));
+        assert_eq!(bytes[1], 0x89);
+        assert_eq!(decode_response(&bytes).as_ref(), Some(&resp));
+        assert_ne!(
+            bytes[1],
+            encode_delivery(3, "/f/F/pub/n-a/cursor", b"row")[1],
+            "a signal is not a log delivery"
+        );
+        for cut in 0..bytes.len() {
+            assert_eq!(decode_response(&bytes[..cut]), None, "cut at {cut}");
+        }
+        let mut later = bytes;
+        later.extend_from_slice(&[0xAA; 9]);
+        assert_eq!(decode_response(&later), Some(resp));
+    }
+
+    /// Hello's request set announces signals by their own bit, which no other verb's bit
+    /// sets and a block without a request set does not.
+    #[test]
+    fn the_request_set_announces_signals_by_its_own_bit() {
+        assert_eq!(REQUEST_SIGNALS, 1 << 10);
+        let ext = |requests| NonceExt {
+            requests,
+            ..NonceExt::default()
+        };
+        assert!(ext(Some(REQUEST_SIGNALS)).supports_signals());
+        assert!(!ext(Some(!REQUEST_SIGNALS)).supports_signals());
+        assert!(!ext(Some(REQUEST_FRESH_PUBLISH)).supports_signals());
+        assert!(!ext(None).supports_signals());
+        assert!(!ext(Some(REQUEST_SIGNALS)).supports_fresh_publish());
     }
 
     /// THE GAP NOTICE ON THE WIRE (R4 addendum A9): a known count and an unknown one each

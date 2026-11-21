@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! xterm `DECSTBM`/`CUU`/`CUD` margin-clamp oracle parity & unterminated `OSC 133` abort guard
-//! (`docs/AUDIT-2026-09.md` line 48; `Astream.Term.TlaDecstbmOsc133UnterminatedGuard`).
+//! (`Astream.Term.TlaDecstbmOsc133UnterminatedGuard`).
 //!
 //! Enforces both VT/shell-integration parity rules verified against the `aterm` oracle:
 //! 1. **xterm `CUU`/`CUD` margin rules**:

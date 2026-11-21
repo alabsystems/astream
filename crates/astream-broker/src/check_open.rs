@@ -159,6 +159,15 @@ impl Drop for Locked {
 
 fn check(path: &Path, key: Option<&[u8; 32]>) -> io::Result<OpenCheck> {
     let locked = Locked::take(path)?;
+    if crate::segments::is_segmented(path) {
+        return Err(io::Error::new(
+            io::ErrorKind::Unsupported,
+            format!(
+                "{}: a segmented log (`segments.rs`) is not checked without its open yet",
+                path.display()
+            ),
+        ));
+    }
     if offline_seal::pending(path)? {
         return Ok(OpenCheck::Unsettled(InterruptedStep::SealSwitch));
     }

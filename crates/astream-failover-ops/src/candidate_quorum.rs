@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Raft / Viewstamped-Replication log-completeness majority-quorum ballot box
-//! (`ROADMAP.md` line 106, `DESIGN-aterm-fabric.md` §15, `Astream.Failover.TlaCandidateQuorum`).
+//! (`DESIGN-aterm-fabric.md` §15, `Astream.Failover.TlaCandidateQuorum`).
 //!
 //! Ensures zero acked-record loss during autonomous failover:
 //! - A voter in `epoch` grants at most one vote, and ONLY if the candidate's log position

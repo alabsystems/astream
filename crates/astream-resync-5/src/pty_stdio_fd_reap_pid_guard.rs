@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Child PTY `0..=2` stdio fd preservation & single-`waitpid` PID-reuse guard
-//! (`docs/AUDIT-2026-09.md` line 49; `Astream.Host.TlaPtyStdioFdReapPidGuard`).
+//! (`Astream.Host.TlaPtyStdioFdReapPidGuard`).
 //!
-//! Eliminates two POSIX process-lifecycle bugs from `AUDIT-2026-09.md` line 49:
+//! Eliminates two POSIX process-lifecycle bugs:
 //! 1. **Low PTY fd preservation (`0..=2`)**: when `openpty` allocates `slave_fd` inside `0..=2`
 //!    (e.g. daemon with closed stdio), post-`dup2` cleanup MUST NOT `close(slave_fd)` (which would
 //!    sever the child's newly wired `stdin`/`stdout`/`stderr`!), closing ONLY `slave_fd >= 3`.

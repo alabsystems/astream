@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Scoped `/f/<F>/...` [`astream_wire::Filter`] advertisement and epoch-versioned routing
-//! information base (`ROADMAP.md` line 124, `Astream.Mesh.TlaSubtreeAnnounce`).
+//! information base (`Astream.Mesh.TlaSubtreeAnnounce`).
 //!
 //! Validates every advertised filter via [`Filter::new`], rejects god-root `/>` announcements
 //! from regional spokes (`Filter` must start with `/f/`), resolves outbound [`Subject`]s to

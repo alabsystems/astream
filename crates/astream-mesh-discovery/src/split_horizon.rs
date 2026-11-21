@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Multi-hop federation path-vector loop detector and hop-TTL clamp (`ROADMAP.md` line 124,
-//! `Astream.Mesh.TlaSplitHorizon`).
+//! Multi-hop federation path-vector loop detector and hop-TTL clamp
+//! (`Astream.Mesh.TlaSplitHorizon`).
 //!
 //! Prevents infinite echo storms across arbitrary cyclic multi-region federation topologies
 //! (`A <-> B <-> C <-> A`) by carrying a compact path-vector header (`v=1 seq=<u64> hops=<n1,n2,...>`):

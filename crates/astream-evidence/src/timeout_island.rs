@@ -2,8 +2,8 @@
 // Copyright 2026 Andrew Yates
 
 // The Clean island for per-claim wall-clock timeout enforcement in the evidence runner
-// (`Astream.Evidence.TlaClaimTimeout`), mounted under `cfg(clean_islands)` in `runner.rs`
-// (`docs/AUDIT-2026-09.md` line 90).
+// (`Astream.Evidence.TlaClaimTimeout`), mounted under `cfg(clean_islands)` in
+// `runner.rs`.
 // Proves that `claim_elapsed_clamp` and `claim_timeout_floor` maintain:
 // 1. `0 < limitMs` whenever `0 < floorMs` (every claim timeout is strictly positive),
 // 2. `elapsedMs <= limitMs` across running ticks, and

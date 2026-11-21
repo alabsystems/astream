@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! BGP-style exponential half-life failover flap dampener (`ROADMAP.md` line 106,
-//! `Astream.Failover.TlaFlapDampener`).
+//! BGP-style exponential half-life failover flap dampener
+//! (`Astream.Failover.TlaFlapDampener`).
 
 #[cfg(clean_islands)]
 #[path = "flap_dampener_island.rs"]

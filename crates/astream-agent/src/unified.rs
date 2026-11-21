@@ -2,7 +2,7 @@
 //! four streams of the determinism dial — **Inputs**, **Outputs**, **Effects**,
 //! and **Cognition** — replayed hermetically and forkable at any offset.
 //!
-//! This is the master seed's *hermetic* form: replay one recorded session to a
+//! This is that session's *hermetic* form: replay one recorded session to a
 //! bit-identical (decision trace, screen, effect digest), then fork it on a single
 //! recorded cognition record and watch **all four streams diverge coherently** —
 //! because the loop is planner-driven, a swapped tool result that finishes the

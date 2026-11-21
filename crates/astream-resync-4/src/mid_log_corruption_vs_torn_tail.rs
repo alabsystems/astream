@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Mid-log rotted-length/CRC corruption vs power-loss torn-tail & `resume_from` truncate barrier
-//! (`docs/AUDIT-2026-09.md` lines 34–35, 44, 81; `Astream.Engine.TlaMidLogCorruptionVsTornTail`).
+//! (`Astream.Engine.TlaMidLogCorruptionVsTornTail`).
 //!
-//! Guards three engine/durable-log recovery invariants from `AUDIT-2026-09.md`:
+//! Guards three engine/durable-log recovery invariants:
 //! 1. A rotted length or CRC mid-log (where non-zero committed bytes exist past the bad header)
 //!    MUST return `MidLogCorruptionFault` and NEVER silently truncate acked records after it,
 //! 2. A partial frame at EOF or followed solely by zero-filled preallocated extents is classified

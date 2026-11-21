@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! `PendingRetire` `visible_head` visibility gate (`docs/ROADMAP.md` §2: *"overlays `PendingRetire`
-//! in `last_matching` and moot retries so retirement takes effect only once the visible head passes
-//! the retire offset"*, `Astream.SubjRet.TlaPendingRetireOverlay`).
+//! `PendingRetire` `visible_head` visibility gate: `PendingRetire` overlays `last_matching` and
+//! moot retries so retirement takes effect only once the visible head passes the retire offset
+//! (`Astream.SubjRet.TlaPendingRetireOverlay`).
 
 #![allow(
     clippy::manual_map,

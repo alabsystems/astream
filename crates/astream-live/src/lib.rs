@@ -3,9 +3,10 @@
 //! `astream-live` — the live-capture bridge: a real Anthropic Messages turn becomes
 //! a unified four-stream session that replays through the in-tree substrate.
 //!
-//! This is the master seed's **non-hermetic** step. The capture is a real model
-//! call, so its output differs run to run and can never be a green (SHA-pinned)
-//! claim — but the two deterministic halves *are* gated: the response-format
+//! This is the **non-hermetic** record pass of `astream_agent::unified`'s
+//! session. The capture is a real model call, so its output differs run to run
+//! and can never be a green (SHA-pinned) claim — but the two deterministic
+//! halves *are* gated: the response-format
 //! **parse** ([`parse_completion`]) and the **replay** of a captured turn (via
 //! `astream_agent::replay_session`). `targo --unverified test -p astream-live` proves both with a
 //! real-format fixture. The live half runs over either of TWO non-hermetic paths,

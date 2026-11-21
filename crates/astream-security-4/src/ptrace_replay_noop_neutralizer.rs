@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Full `ptrace` syscall neutralization & single-threaded `execve` replay state machine
-//! (`docs/ROADMAP.md` §"Effects, foreign-process sub-seeds" items 2 & 3;
+//! (foreign-process replay: syscall neutralization and `execve` tracing;
 //! `Astream.Host.TlaPtraceReplayNoopNeutralizer`).
 //!
 //! Ensures NO real intercepted syscall ever reaches the host kernel during deterministic replay of

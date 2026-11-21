@@ -31,6 +31,7 @@ const fn plain(budget: usize) -> Shape {
     Shape {
         sealed: false,
         verified: false,
+        strict: false,
         budget,
     }
 }
@@ -484,6 +485,7 @@ fn shape_of(seed: u64) -> Shape {
     Shape {
         sealed,
         verified: cfg!(feature = "anti-rollback") && sealed && seed % 2 == 0,
+        strict: false,
         budget: [512, 0, 16 << 20][(seed / 3 % 3) as usize],
     }
 }

@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Sidecar planted-symlink refusal & compaction permission-mode preservation guard
-//! (`docs/AUDIT-2026-09.md` lines 39–40; `Astream.Broker.TlaSidecarNosymlinkPermPreserveGuard`).
+//! (`Astream.Broker.TlaSidecarNosymlinkPermPreserveGuard`).
 //!
-//! Enforces the filesystem staging security invariants from `AUDIT-2026-09.md` lines 39–40:
+//! Enforces the filesystem staging security invariants:
 //! 1. Staging and destination paths for `.hw`, `.base`, `.replica`, `.compact`, `.state`, `.held`,
 //!    and `--seq-file` MUST refuse planted symlinks (`O_NOFOLLOW | O_CREAT | O_EXCL`),
 //! 2. Retention/compaction staging MUST `fchmod` the staged file to the source log's exact mode

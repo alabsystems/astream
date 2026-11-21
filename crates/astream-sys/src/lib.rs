@@ -85,7 +85,9 @@
 //!   without waiting (`O_NONBLOCK`, so a FIFO opens at once), following or refusing a
 //!   link at its last component (`O_NOFOLLOW`), and [`open_nonblocking_rw`] the same
 //!   way for reading and writing, writing nothing, so a check is refused where a writer
-//!   in place would be; [`owner_private`] and
+//!   in place would be, a folder `IsADirectory` on every host ([`write_open_refusal`]
+//!   names one Windows refuses as access denied, for any open for writing);
+//!   [`owner_private`] and
 //!   [`owner_private_dir`] judge the open descriptor: the kind asked for (a regular
 //!   file, a directory), owned by [`euid`], no group or other permission bit, and on
 //!   macOS no access-list entry that allows anyone anything (`fstatx_np` into a filesec,
@@ -136,8 +138,8 @@
 //!
 //! ## Who else calls it
 //!
-//! aterm depends on this crate directly (astream's `docs/ROADMAP.md`, "What aterm
-//! uses beyond the fabric"). It reads the boot through [`boot_session`] and
+//! aterm depends on this crate directly (aterm's `vendor/README-astream.md` lists its
+//! calls). It reads the boot through [`boot_session`] and
 //! [`parse_boot_id`] in aterm-link, aterm-agent, aterm-acaffeine, aterm-gui, aterm-uds,
 //! aterm-release (its publisher fence's `fence-boot`, compared as 16 bytes), aterm-cli
 //! (its setup ledger) and aterm-update (which reads Linux's `boot_id` file itself and
@@ -1017,9 +1019,39 @@ pub fn open_nonblocking(path: &std::path::Path, links: Links) -> io::Result<File
 /// As [`open_nonblocking`], the open's own error for the write access included
 /// (`PermissionDenied` for the mode, `EPERM` for an immutable flag, `EROFS`,
 /// `EISDIR` for a directory, which no read-write open takes). Off Unix, a plain
-/// read-write open.
+/// read-write open, a folder refused `IsADirectory` there too ([`write_open_refusal`]).
 pub fn open_nonblocking_rw(path: &std::path::Path, links: Links) -> io::Result<File> {
     open_flagged(path, links, true)
+}
+
+/// Windows' `ERROR_ACCESS_DENIED`, which `std` reads as `PermissionDenied`.
+#[cfg(windows)]
+const ERROR_ACCESS_DENIED: i32 = 5;
+
+/// Windows' `ERROR_DIRECTORY_NOT_SUPPORTED`, its own code for an operation a folder does
+/// not take, which `std` reads as `IsADirectory`.
+#[cfg(windows)]
+const ERROR_DIRECTORY_NOT_SUPPORTED: i32 = 336;
+
+/// The refusal `refused` of an open for WRITING at `path`, with a folder there named as
+/// the folder it is on every host: `IsADirectory`, the kind Unix's read-write `open(2)` of
+/// a folder answers (`EISDIR`) itself. Windows' `CreateFileW` refuses a folder opened as a
+/// file with `ERROR_ACCESS_DENIED`, which reads as `PermissionDenied`, the kind of a mode
+/// or an access list that refuses the write. There, that refusal of a path that is a folder
+/// (followed through a link, as the open follows it) is answered
+/// `ERROR_DIRECTORY_NOT_SUPPORTED`, which reads as `IsADirectory`. Any other refusal, and
+/// every refusal off Windows, is `refused` itself.
+#[must_use]
+pub fn write_open_refusal(refused: io::Error, path: &std::path::Path) -> io::Error {
+    #[cfg(windows)]
+    if refused.raw_os_error() == Some(ERROR_ACCESS_DENIED)
+        && std::fs::metadata(path).is_ok_and(|meta| meta.is_dir())
+    {
+        return io::Error::from_raw_os_error(ERROR_DIRECTORY_NOT_SUPPORTED);
+    }
+    #[cfg(not(windows))]
+    let _ = path;
+    refused
 }
 
 fn open_flagged(path: &std::path::Path, links: Links, write: bool) -> io::Result<File> {
@@ -1045,10 +1077,15 @@ fn open_flagged(path: &std::path::Path, links: Links, write: bool) -> io::Result
     #[cfg(not(unix))]
     {
         let _ = links;
-        std::fs::OpenOptions::new()
+        let opened = std::fs::OpenOptions::new()
             .read(true)
             .write(write)
-            .open(path)
+            .open(path);
+        if write {
+            opened.map_err(|refused| write_open_refusal(refused, path))
+        } else {
+            opened
+        }
     }
 }
 
@@ -1754,3 +1791,6 @@ mod tests {
 
 #[cfg(all(test, unix))]
 mod owner_tests;
+
+#[cfg(test)]
+mod open_tests;

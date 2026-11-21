@@ -1,6 +1,6 @@
 .PHONY: toolchain build stock test gate render run ci fmt tippy doc verify-ready
 
-# astream builds on the Trust toolchain (owner directive 2026-09-28): `targo` is the
+# astream builds on the Trust toolchain, the lab's toolchain for Rust: `targo` is the
 # build driver, `targo tippy` the linter, `targo fmt` the formatter. Every compiling
 # verb names its lane — `--unverified` here (no proof claim); `targo trust ...` is
 # the verified lane (scripts/verify-trust.sh). There is no stock fallback: the one

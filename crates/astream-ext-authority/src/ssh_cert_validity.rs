@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! OpenSSH user/host certificate validity chain verifier (`docs/ROADMAP.md` §1: *"Identity bound
-//! to an external authority (an SSH agent, OIDC) rather than a locally pinned host key"*) bounding
-//! validity spans and advancing monotonic certificate serials (`Astream.ExtAuth.TlaSshCertValidity`).
+//! OpenSSH user/host certificate validity chain verifier, for identity bound to an external
+//! authority (an SSH agent, OIDC) rather than a locally pinned host key, bounding validity spans
+//! and advancing monotonic certificate serials (`Astream.ExtAuth.TlaSshCertValidity`).
 
 #![allow(
     clippy::manual_map,

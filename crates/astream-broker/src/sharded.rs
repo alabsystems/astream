@@ -1,4 +1,4 @@
-//! `ShardedBroker` — share-nothing partition sharding (the doctrine's §4.2
+//! `ShardedBroker` — share-nothing partition sharding (a
 //! thread-per-core architecture). N **independent** single-partition brokers, each its
 //! own durable log + writer thread + group commit + pipelining, with NO shared lock
 //! across shards — so write throughput scales with cores/disks instead of serializing

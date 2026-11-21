@@ -1,6 +1,6 @@
 [package]
 name = "astream-subject-retire"
-description = "An independent model of the distinct-subject budget & `Request::Retire` protocol (`docs/ROADMAP.md` §2): `max_subjects_per_producer` quota meter, `last_owner` carried-charge authorization, live/durable will target retirement blocker, `COMMIT_TAG_RETIRE` (`u64::MAX`) marker validator, `PendingRetire` visible-head overlay, and uncarried-cut retirement refusal; no astream runtime crate and no aterm code calls it. The shipped subject budget and `Retire` are `astream-broker`'s `store.rs`, proved by `broker.subject-retire` and `broker.subject-budget-read`. forbid(unsafe_code)."
+description = "An independent model of the distinct-subject budget & `Request::Retire` protocol: `max_subjects_per_producer` quota meter, `last_owner` carried-charge authorization, live/durable will target retirement blocker, `COMMIT_TAG_RETIRE` (`u64::MAX`) marker validator, `PendingRetire` visible-head overlay, and uncarried-cut retirement refusal; no astream runtime crate and no aterm code calls it. The shipped subject budget and `Retire` are `astream-broker`'s `store.rs`, proved by `broker.subject-retire` and `broker.subject-budget-read`. forbid(unsafe_code)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

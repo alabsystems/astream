@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Live & durable will target retirement blocker (`is_retire_will()`, `docs/ROADMAP.md` §2:
-//! *"refuses while a live or durable will that can still append targets the subject"*,
-//! `Astream.SubjRet.TlaActiveWillRetireGuard`).
+//! Live & durable will target retirement blocker (`is_retire_will()`): a retire is refused while
+//! a live or durable will that can still append targets the subject
+//! (`Astream.SubjRet.TlaActiveWillRetireGuard`).
 
 #![allow(
     clippy::manual_map,

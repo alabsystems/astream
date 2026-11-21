@@ -12,14 +12,14 @@
 //!   records, at their bytes.
 //! - The open: random logs written through the real writer (single publishes with re-sent
 //!   keys, batches, group commits, wills, bindings, retirements, retention cuts and
-//!   compactions that carry state, clean and unclean stops), sealed and plain, at residency
-//!   budgets of 0, 512 B, 16 MiB and unbounded, each reopened as two copies of the same
-//!   files after a random tear (a cut inside its last batch, zeros, a torn header, garbage, a
-//!   flipped byte, a lost identity sidecar): the reference opens one, the streaming open
-//!   through a small random window and pending bound the other, and the two answer every
-//!   query alike — the refusal (or the explicit repair) included, the records read back with
-//!   the cold reads they cost, every index, the tier's pages and window, the identity settled
-//!   and the bytes left on disk.
+//!   compactions that carry state, clean and unclean stops), sealed and plain, Relaxed and
+//!   Strict, at residency budgets of 0, 512 B, 16 MiB and unbounded, each reopened as two
+//!   copies of the same files after a random tear (a cut inside its last batch, zeros, a
+//!   torn header, garbage, a flipped byte, a lost identity sidecar): the reference opens
+//!   one, the streaming open through a small random window and pending bound the other,
+//!   and the two answer every query alike — the refusal (or the explicit repair) included,
+//!   the records read back with the cold reads they cost, every index, the tier's pages and
+//!   window, the identity settled and the bytes left on disk.
 //! - NEGATIVE CONTROLS: a scan that passes over the record straddling its window's end, and
 //!   a tier that keeps its window from the head, each make the two differ.
 
@@ -300,11 +300,17 @@ pub(super) struct Shape {
     pub(super) sealed: bool,
     /// Strict, sealed, and opened with the anti-rollback watermark verified.
     pub(super) verified: bool,
+    /// Strict, though not verified. A Strict run is never unclean (its acks were on stable
+    /// media), so on every host the open cuts a tear in its newest batch back to the batch's
+    /// start. A Relaxed run that stopped uncleanly is held to the same cut only by an open in
+    /// the same boot, with the log on the boot volume, which a host that names neither
+    /// (Windows) never makes: there the open keeps the longest intact prefix.
+    pub(super) strict: bool,
     pub(super) budget: usize,
 }
 
 pub(super) fn options(shape: Shape, read: ReadOpen) -> OpenOptions {
-    let mut opts = OpenOptions::new(if shape.verified {
+    let mut opts = OpenOptions::new(if shape.verified || shape.strict {
         Durability::Strict
     } else {
         Durability::Relaxed
@@ -806,36 +812,62 @@ fn stream_differs(seed: u64, shape: Shape, mutant: ReadOpen, met: &mut Met) -> R
     compare(root.path(), &path, shape, shipped, "last", met).map(|_| ())
 }
 
+/// A seed's shape: sealed one seed in three (and verified against its watermark every other
+/// one of those), Strict one in three of the others, so a refold is met on every host
+/// ([`Shape::strict`]), and the residency budget by fours.
 fn shape_of(seed: u64) -> Shape {
     let sealed = cfg!(feature = "at-rest") && seed % 3 == 1;
     Shape {
         sealed,
         verified: cfg!(feature = "anti-rollback") && sealed && seed % 2 == 0,
+        strict: seed % 3 == 2,
         budget: BUDGETS[(seed % 4) as usize],
     }
 }
 
+/// Every shape of open the comparison is for is met by the seeds: opens that cut a torn tail,
+/// opens that refused and repairs after them, streaming opens whose window was the records they
+/// held decoded or was read again, and streaming opens that folded the log again, both after a
+/// Strict run (on every host) and after a Relaxed one where the host names its boot and the log
+/// is on the boot volume, the one place a Relaxed run's tear is cut back to its batch's start.
+/// NEGATIVE CONTROL (run on Linux 2026-11-19, then restored): `Prior::unclean` judging a Relaxed
+/// run of the same boot unclean (its last arm `Some(_) => None` answering a reason) fails "a
+/// Relaxed run's refold" with 0 Relaxed refolds, while the Strict seeds still refold; the
+/// count of all refolds this test held before passes it.
 #[test]
 fn the_streaming_open_answers_every_query_as_the_whole_buffer_open() {
     let mut met = Met::default();
-    let refolds = REFOLDS.with(std::cell::Cell::get);
+    let (mut strict_refolds, mut relaxed_refolds) = (0usize, 0usize);
     let windows = crate::tier::WINDOWS.with(std::cell::Cell::get);
     for seed in 0..24u64 {
         let shape = shape_of(seed);
+        let refolds = REFOLDS.with(std::cell::Cell::get);
         if let Err(e) = stream_differs(seed, shape, ReadOpen::default(), &mut met) {
             panic!("seed {seed} {shape:?}: {e}");
         }
+        let refolded = REFOLDS.with(std::cell::Cell::get) - refolds;
+        if shape.strict || shape.verified {
+            strict_refolds += refolded;
+        } else {
+            relaxed_refolds += refolded;
+        }
     }
-    let refolds = REFOLDS.with(std::cell::Cell::get) - refolds;
     let (held, reread) = crate::tier::WINDOWS.with(std::cell::Cell::get);
     let (held, reread) = (held - windows.0, reread - windows.1);
-    // Every shape of open the comparison is for was met: opens that cut a torn tail, opens
-    // that refused and repairs after them, streaming opens that folded the log again, and
-    // streaming opens whose window was the records they held decoded or was read again.
+    let probe = Scratch::new("open-stream-volume");
+    let file = probe.path().join("log");
+    std::fs::write(&file, b"").unwrap();
+    let same_boot = astream_sys::boot_session().is_some()
+        && crate::store::on_boot_volume(&std::fs::File::open(&file).unwrap());
     assert!(
-        met.cut > 0 && met.refused > 0 && met.repaired > 0 && refolds > 0 && held > 0 && reread > 0,
-        "the seeds met too little: {met:?}, {refolds} refolds, {held} windows held, {reread} \
-         read again"
+        met.cut > 0 && met.refused > 0 && met.repaired > 0 && held > 0 && reread > 0,
+        "the seeds met too little: {met:?}, {held} windows held, {reread} read again"
+    );
+    assert!(strict_refolds > 0, "a Strict run's refold: none");
+    assert!(
+        relaxed_refolds > 0 || !same_boot,
+        "a Relaxed run's refold, on a host that names its boot with the log on its volume: none \
+         ({strict_refolds} after Strict runs)"
     );
 }
 
@@ -865,6 +897,7 @@ fn a_streaming_open_that_drops_a_straddling_record_or_windows_from_the_head_is_c
             let shape = Shape {
                 sealed: false,
                 verified: false,
+                strict: false,
                 budget,
             };
             stream_differs(seed, shape, mutant, &mut Met::default()).is_err()
@@ -917,6 +950,7 @@ fn an_open_reserves_its_columns_once_after_an_unclean_stop_as_after_a_clean_one(
     let shape = Shape {
         sealed: false,
         verified: false,
+        strict: false,
         budget: 16 << 20,
     };
     let sample = crate::tier::SAMPLE;

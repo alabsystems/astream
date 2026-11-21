@@ -2,8 +2,8 @@
 // Copyright 2026 Andrew Yates
 
 //! Zero-dependency RFC 4648 base64url + deterministic JSON OIDC claim verifier (`iss`, `aud`,
-//! `sub`, `iat`, `nbf`, `exp`) and `h-<principal>` mapper (`ROADMAP.md` lines 12-14,
-//! `Astream.CertAuth.TlaOidcClaims`).
+//! `sub`, `iat`, `nbf`, `exp`) and `h-<principal>` mapper
+//! (`Astream.CertAuth.TlaOidcClaims`).
 //!
 //! Validates external OIDC/JWT claim payloads without third-party JSON or JWT crates:
 //! - Decodes RFC 4648 §5 base64url segments (rejecting padding or non-alphabet bytes).

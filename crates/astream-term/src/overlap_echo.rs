@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Fine-grained per-byte PTY write->echo causal attribution across overlapping in-flight
-//! inputs (`docs/ROADMAP.md` line 179, `Astream.Term.TlaOverlapEcho`).
+//! inputs (`Astream.Term.TlaOverlapEcho`).
 //!
 //! When multiple un-echoed PTY writes overlap in flight (`drive_input` / `predict_at` at
 //! `in_offset = 10`, `11`, `12` before the kernel `termios` line discipline echoes any of

@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Automatic multi-region peer discovery and loop-free hop-TTL federation routing
-//! (`ROADMAP.md` "Federation across brokers"; `DESIGN-aterm-fabric.md` §15).
+//! (`DESIGN-aterm-fabric.md` §15).
 //!
 //! Peers publish compact `v=1` [`PeerAnnouncement`] rows as retained `Last` records under
 //! `/f/<fleet>/pub/<region>/peer/announce`. [`FederationMeshTable`] ingests those rows with:

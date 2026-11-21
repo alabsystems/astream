@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Content-addressed Merkle-DAG session history (`docs/DESIGN-astream-term.md` §9,
-//! `docs/ROADMAP.md` "Content-addressed Merkle-DAG session history").
+//! Content-addressed Merkle-DAG session history
+//! (`docs/DESIGN-astream-term.md` §9).
 //!
 //! Each session [`Envelope`] is linked into a domain-separated SHA-256 commit chain
 //! ([`MerkleChain`]) where every [`MerkleNode`] commits to its dense [`Offset`],

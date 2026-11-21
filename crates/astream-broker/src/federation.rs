@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Cross-broker federation (`ROADMAP.md` & `DESIGN-aterm-fabric` Federation across brokers):
+//! Cross-broker federation (`DESIGN-aterm-fabric` Federation across brokers):
 //! durable consumer-group-backed subtree mirroring ([`FederationBridge`]) with deterministic
 //! `(producer_id, src_offset)` exactly-once deduplication, [`LogIdentity`] lineage continuity
 //! checks, loop-preventing [`SubjectRewrite`] rules, and Chandy-Lamport consistent cuts

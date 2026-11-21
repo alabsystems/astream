@@ -4,7 +4,7 @@
 //! Incremental `/a/bind` & `/a/will` live-pin horizon tracker for `BrokerLog::retain_before`
 //! (`Astream.Broker.TlaCompactionPinHorizonFence`).
 //!
-//! Resolves the compaction pin bottleneck noted in `docs/ROADMAP.md`: tracks live connection/name
+//! Resolves the compaction pin bottleneck: tracks live connection/name
 //! pins on the stack (`MAX_COMPACTION_PINS = 16`) and computes the exact safe prefix-truncation
 //! ceiling `min(requested_retain_before, oldest_live_pin_offset)` without scanning the full log.
 

@@ -6,7 +6,7 @@
 //!
 //! Rung 8 ([`crate::identity`]) authenticates peers with locally pinned host keys
 //! and static client Ed25519 allow-lists. This module binds transport identity to an
-//! **external authority** (`docs/ROADMAP.md` §1, `docs/DESIGN-astream-term.md` §11):
+//! **external authority** (`docs/DESIGN-astream-term.md` §11):
 //!
 //! 1. **External `ssh-agent` key custody ([`SshAgentSigner`], [`IdentitySigner`]):**
 //!    speaks the OpenSSH `SSH_AUTH_SOCK` binary wire protocol (`draft-miller-ssh-agent`,
@@ -1671,7 +1671,7 @@ struct HostSlotState {
 }
 
 /// Live dual-slot host key & [`IdentityCertificate`] rotator for zero-downtime broker
-/// host-key rollover (`docs/ROADMAP.md` §1).
+/// host-key rollover.
 ///
 /// Holds the current primary `(IdentitySigner, IdentityCertificate)` plus an optional
 /// retiring slot valid until `overlap_until_ms`. If the primary certificate has not yet

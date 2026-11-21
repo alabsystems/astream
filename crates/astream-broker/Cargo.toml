@@ -11,7 +11,7 @@ rust-version.workspace = true
 # Zero third-party dependencies — std only (threads, sync, UnixListener) plus the
 # in-tree wire vocabulary. The broker is a substrate crate, so forbid(unsafe).
 [features]
-# Retention compiles in by default (REQUIREMENTS R4; aterm's ruling U23(a)): a broker
+# Retention compiles in by default (REQUIREMENTS R4; aterm's session-log design, U23(a)): a broker
 # given no rules never compacts and behaves exactly as one built without it.
 default = ["retention"]
 # Off by default: enforce capabilities on the accept path. Pulls astream-cap and

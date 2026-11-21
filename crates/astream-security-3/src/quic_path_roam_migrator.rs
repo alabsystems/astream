@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! QUIC RFC 9000 §9 zero-gap connection migration & 3x anti-amplification path validator
-//! (`docs/ROADMAP.md` §"QUIC transport / connection migration";
+//! (QUIC transport and connection migration;
 //! `Astream.Aead.TlaQuicPathRoamMigrator`).
 //!
 //! Enables zero-gap roaming across IP/port transitions without tearing down the authenticated stream

@@ -5,8 +5,8 @@
 // makes that a build failure of `targo --unverified test -p astream-cap` (the doctest build).
 #![deny(dead_code)]
 //! `astream-cap` — the unforgeable capability mint: the capability/ACL half of
-//! "SSH" for untrusted-network use (the doctrine's "sound, unforgeable capability
-//! mint") — WHO may attach where. The confidentiality/authentication half is the
+//! "SSH" for untrusted-network use (a sound mint whose grants no holder can forge)
+//! — WHO may attach where. The confidentiality/authentication half is the
 //! sibling crate `astream-aead` (an XChaCha20-Poly1305 sealed wire), deliberately
 //! a separate crate so its vetted cipher dependency stays isolated: this crate
 //! takes no third-party dependency at all.
@@ -1325,7 +1325,7 @@ pub fn attenuate(
     mint(secret, child_grant)
 }
 
-/// Offline bearer-attenuated Macaroon capability derivation (`ROADMAP.md` & `REQUIREMENTS` R6).
+/// Offline bearer-attenuated Macaroon capability derivation (`REQUIREMENTS` R6).
 ///
 /// Derives a narrower child [`Capability`] from `parent` **without** the broker's
 /// master `secret`:

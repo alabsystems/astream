@@ -3,8 +3,8 @@
 
 #![allow(clippy::manual_is_ascii_check)]
 
-//! Distributed durable execution over an ordered broker log (`docs/ROADMAP.md`
-//! "distributed durable execution", `docs/DESIGN-astream-term.md` §13).
+//! Distributed durable execution over an ordered broker log
+//! (`docs/DESIGN-astream-term.md` §13).
 //!
 //! Lifts [`crate::WorkflowJournal`] and [`crate::DagJournal`] from single-host files to
 //! multi-worker distributed coordination over any [`WorkflowBus`] (implemented in-memory

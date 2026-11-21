@@ -4,7 +4,7 @@
 //! Turn-level supervisor state machine for driving a nested interactive TUI agent
 //! (such as Claude Code under [`astream_term::events::Profile::claude`]) end-to-end
 //! over `astream-host::Pty` + `Driver`, `astream-broker`, and `aspump`
-//! (`docs/ROADMAP.md` §5, `Astream.Pump.TlaNestedDrive`).
+//! (`Astream.Pump.TlaNestedDrive`).
 //!
 //! Ensures every `PROMPT_READY boffset=<N>` boundary is driven at most once across
 //! supervisor/pump restarts (`nested_turn_ready_to_drive`), bounds injected prompt

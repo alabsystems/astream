@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Standalone unmodified foreign target binary for `seccomp_record_replay` (`docs/ROADMAP.md` §4).
+//! Standalone unmodified foreign target binary for `seccomp_record_replay`.
 //!
 //! Performs zero `PTRACE_TRACEME`, zero `SIGSTOP`, and zero cooperation with any recorder:
 //! on Linux it reads `argv[1]` via one `clock_gettime`, one 8-byte `getrandom`, and one

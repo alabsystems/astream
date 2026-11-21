@@ -639,7 +639,7 @@ fn client_conditional_retire_verb_cas_moot_supersede_and_nonce_ext() {
 }
 
 /// Revocation file automatic `SIGHUP` reload and capability-principal live revocation
-/// (`REQUIREMENTS` R6, `ROADMAP.md`):
+/// (`REQUIREMENTS` R6):
 /// - `load_revocation_file` parses atomically and fail-closed, and installs the `SIGHUP`
 ///   handler so `kill -HUP <pid>` reloads the file in place.
 /// - Adding a capability principal (`s-sub` / `s-will`) to the revocation file and sending
@@ -746,7 +746,7 @@ fn sighup_reloads_revocation_file_and_revokes_open_principal_subscriptions_and_w
     h.shutdown();
 }
 
-/// Capability attachment on Replicated-tier follower links (`ROADMAP.md` §Replication):
+/// Capability attachment on Replicated-tier follower links:
 /// - `Broker::open_replica_guarded` and `Broker::open_replicated_guarded` refuse an
 ///   empty secret with `InvalidInput`.
 /// - A leader whose follower capability is forged (wrong secret) is refused at `Attach`

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Zero-gap AEAD-over-UDP connection migration (`AROM` v1; `docs/ROADMAP.md` §1).
+//! Zero-gap AEAD-over-UDP connection migration (`AROM` v1).
 //!
 //! On TCP, a client roaming across networks (Wi-Fi -> cellular, NAT rebinding, or an
 //! interface swap) loses its 4-tuple: the old socket closes, any registered broker

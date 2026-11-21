@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-// The Clean island for log-identity-bound at-rest encryption (`AUDIT-2026-09` L72,
-// `ROADMAP.md` L53, `DESIGN-aterm-fabric` §8.1 T12), mounted under `cfg(clean_islands)`
+// The Clean island for log-identity-bound at-rest encryption (`DESIGN-aterm-fabric`
+// §8.1 T12), mounted under `cfg(clean_islands)`
 // in `store.rs`. Proves that at-rest AAD binding version selection is monotone
 // (`prevVer <= curVer`, preventing v2 -> v1 downgrade) and that distinct `(domain,
 // sealId, index)` tuples are rejected by authenticated unsealing (preventing cross-log,

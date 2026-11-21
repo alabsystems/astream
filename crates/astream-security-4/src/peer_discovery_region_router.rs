@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Multi-region dynamic federation peer discovery & loop-free RTT route selector
-//! (`docs/ROADMAP.md` §"Federation across brokers";
+//! (federation across brokers;
 //! `Astream.Broker.TlaPeerDiscoveryRegionRouter`).
 //!
 //! Extends declarative `FederationBridge` with dynamic peer gossip membership and bounded-hop

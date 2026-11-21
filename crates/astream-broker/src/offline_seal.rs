@@ -710,6 +710,13 @@ struct Plain {
 
 #[cfg(all(feature = "at-rest", unix))]
 fn seal_keyed(path: &Path, key: &[u8; 32], seam: &Seam) -> io::Result<SealedLog> {
+    if crate::segments::is_segmented(path) {
+        return Err(refused(
+            path,
+            io::ErrorKind::Unsupported,
+            "a segmented log is not built to be sealed at rest yet",
+        ));
+    }
     match std::fs::symlink_metadata(path) {
         Ok(m) if m.is_file() => {}
         Ok(_) => {

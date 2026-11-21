@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Autonomous background quorum lease-heartbeat failover daemon
-//! (`docs/ROADMAP.md` §"Replicated tier follow-ons";
+//! (replicated-tier failover;
 //! `Astream.Broker.TlaAutonomousQuorumLeaseDaemon`).
 //!
 //! Coordinates split-brain-free autonomous failover across a replicated broker cluster:

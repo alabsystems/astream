@@ -2,8 +2,8 @@
 //! inside the signed material, and a guarded broker stops honouring the
 //! capability at that instant -- at the attach door and on every later request.
 //!
-//! The gap this closes is named twice in `docs/DOCTRINE.md` §6: the capability
-//! rows say "there is no key distribution, rotation or revocation surface". A
+//! The gap this closes: a capability had no key distribution, rotation or
+//! revocation surface of its own. A
 //! minted capability was valid for as long as the broker's secret was, so the
 //! only way to withdraw one was to rotate the secret and reissue EVERY other
 //! capability with it. An expiry is the smallest honest revocation surface: a

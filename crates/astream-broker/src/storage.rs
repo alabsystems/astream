@@ -57,6 +57,9 @@ pub(crate) enum Backing {
     /// descriptor — with the [`FlushHandle`]s the writer takes to flush it outside the
     /// log's lock ([`flush_handle`](Self::flush_handle) says why).
     Os(Arc<File>),
+    /// A segmented log (`segments.rs`): its locked anchor and its segments, read as one
+    /// byte range and written at the active segment.
+    Seg(crate::segments::Segments),
     /// The simulated device.
     #[cfg(any(test, debug_assertions))]
     Sim(crate::sim_device::Sim),
@@ -68,10 +71,10 @@ pub(crate) enum Backing {
 #[cfg(not(any(test, debug_assertions)))]
 const _: (fn(&Backing), fn(&HandleBacking), fn(&Dir)) = (
     |b| match b {
-        Backing::Os(_) => {}
+        Backing::Os(_) | Backing::Seg(_) => {}
     },
     |h| match h {
-        HandleBacking::Os(_) => {}
+        HandleBacking::Os(_) | HandleBacking::Seg(_) => {}
     },
     |d| match d {
         Dir::Os(_) => {}
@@ -102,6 +105,7 @@ impl Backing {
                 f.seek(SeekFrom::Start(0))?;
                 f.read_to_end(out)
             }
+            Backing::Seg(s) => s.read_to_end(out),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => Ok(s.read_log(out)),
         }
@@ -114,6 +118,7 @@ impl Backing {
     pub(crate) fn write_at(&self, bytes: &[u8], at: u64) -> io::Result<()> {
         match self {
             Backing::Os(f) => write_all_at(f, bytes, at),
+            Backing::Seg(s) => s.write_at(bytes, at),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => {
                 s.write_at(at, bytes);
@@ -129,10 +134,21 @@ impl Backing {
     pub(crate) fn write_at_cursor(&self, bytes: &[u8]) -> io::Result<()> {
         match self {
             Backing::Os(f) => (&**f).write_all(bytes),
+            Backing::Seg(s) => s.write_at_cursor(bytes),
             Backing::Sim(s) => {
                 s.write_at_cursor(bytes);
                 Ok(())
             }
+        }
+    }
+
+    /// Cut the log back to `len` bytes wherever they end: an open's cut and a replica's
+    /// truncation, which on a segmented log may reach below its active segment
+    /// ([`Segments::cut_back`](crate::segments::Segments::cut_back)).
+    pub(crate) fn cut_back(&mut self, len: u64) -> io::Result<()> {
+        match self {
+            Backing::Seg(s) => s.cut_back(len),
+            other => other.resize_file(len),
         }
     }
 
@@ -143,6 +159,7 @@ impl Backing {
                 let op: fn(&File, u64) -> io::Result<()> = File::set_len;
                 op(f, len)
             }
+            Backing::Seg(s) => s.resize(len),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => {
                 let op: fn(&crate::sim_device::Sim, u64) = crate::sim_device::Sim::set_len;
@@ -157,6 +174,7 @@ impl Backing {
     pub(crate) fn sync_data(&self) -> io::Result<()> {
         match self {
             Backing::Os(f) => astream_sys::full_sync_data(f),
+            Backing::Seg(s) => s.sync_data(),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => {
                 s.full_flush();
@@ -171,6 +189,7 @@ impl Backing {
     pub(crate) fn barrier(&self) -> io::Result<()> {
         match self {
             Backing::Os(f) => astream_sys::barrier_sync(f),
+            Backing::Seg(s) => astream_sys::barrier_sync(s.active_file()),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => {
                 s.barrier();
@@ -184,7 +203,7 @@ impl Backing {
     /// probe), and always the simulated device, which models one on every platform.
     pub(crate) fn barrier_exists(&self) -> bool {
         match self {
-            Backing::Os(_) => cfg!(target_vendor = "apple"),
+            Backing::Os(_) | Backing::Seg(_) => cfg!(target_vendor = "apple"),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(_) => true,
         }
@@ -197,7 +216,7 @@ impl Backing {
     pub(crate) fn device(&self) -> Option<crate::LogDevice> {
         match self {
             #[cfg(unix)]
-            Backing::Os(f) => {
+            Backing::Os(f) | Backing::Seg(crate::segments::Segments { anchor: f, .. }) => {
                 use std::os::unix::fs::MetadataExt as _;
                 let meta = f.metadata().ok()?;
                 Some(crate::LogDevice {
@@ -206,7 +225,7 @@ impl Backing {
                 })
             }
             #[cfg(not(unix))]
-            Backing::Os(_) => None,
+            Backing::Os(_) | Backing::Seg(_) => None,
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(_) => None,
         }
@@ -229,6 +248,7 @@ impl Backing {
     pub(crate) fn flush_handle(&self, fail: bool) -> FlushHandle {
         let backing = match self {
             Backing::Os(f) => HandleBacking::Os(Arc::clone(f)),
+            Backing::Seg(s) => HandleBacking::Seg(crate::segments::Out::of(s)),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => HandleBacking::Sim(s.clone()),
         };
@@ -244,6 +264,7 @@ impl Backing {
     pub(crate) fn batch_out(&self) -> BatchOut {
         BatchOut(match self {
             Backing::Os(f) => HandleBacking::Os(Arc::clone(f)),
+            Backing::Seg(s) => HandleBacking::Seg(crate::segments::Out::of(s)),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => HandleBacking::Sim(s.clone()),
         })
@@ -253,6 +274,7 @@ impl Backing {
     pub(crate) fn sync_all(&self) -> io::Result<()> {
         match self {
             Backing::Os(f) => astream_sys::full_sync(f),
+            Backing::Seg(s) => s.sync_all(),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => {
                 s.full_flush();
@@ -266,6 +288,9 @@ impl Backing {
         match self {
             Backing::Os(f) => {
                 let _ = astream_sys::guard::unlock(f);
+            }
+            Backing::Seg(s) => {
+                let _ = astream_sys::guard::unlock(s.anchor());
             }
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(_) => {}
@@ -284,6 +309,13 @@ impl Backing {
                 read_exact_at(f, &mut buf, start)?;
                 Ok(buf)
             }
+            Backing::Seg(s) => {
+                let mut buf = vec![0u8; len];
+                if s.read_some_at(start, &mut buf)? != len {
+                    return Err(io::Error::from(io::ErrorKind::UnexpectedEof));
+                }
+                Ok(buf)
+            }
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => s
                 .read_at(start, len)
@@ -295,6 +327,7 @@ impl Backing {
     pub(crate) fn len(&self) -> io::Result<u64> {
         match self {
             Backing::Os(f) => Ok(f.metadata()?.len()),
+            Backing::Seg(s) => s.len(),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => Ok(s.log_len() as u64),
         }
@@ -307,6 +340,7 @@ impl Backing {
     pub(crate) fn read_some_at(&self, start: u64, buf: &mut [u8]) -> io::Result<usize> {
         match self {
             Backing::Os(f) => read_some_at(f, buf, start),
+            Backing::Seg(s) => s.read_some_at(start, buf),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(s) => Ok(s.read_log_at(start, buf)),
         }
@@ -370,6 +404,7 @@ impl Backing {
     pub(crate) fn os(&self) -> io::Result<&Arc<File>> {
         match self {
             Backing::Os(f) => Ok(f),
+            Backing::Seg(s) => Ok(s.anchor()),
             #[cfg(any(test, debug_assertions))]
             Backing::Sim(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
@@ -477,7 +512,7 @@ fn read_once_at(file: &File, buf: &mut [u8], start: u64) -> io::Result<usize> {
 ///   batch is half written seeks to the end as it stands mid-batch. It also costs a seek
 ///   per cold read and leaves a hazard every future reader of the file must remember.
 #[cfg(unix)]
-fn write_all_at(file: &File, bytes: &[u8], at: u64) -> io::Result<()> {
+pub(crate) fn write_all_at(file: &File, bytes: &[u8], at: u64) -> io::Result<()> {
     use std::os::unix::fs::FileExt;
     file.write_all_at(bytes, at)
 }
@@ -485,7 +520,7 @@ fn write_all_at(file: &File, bytes: &[u8], at: u64) -> io::Result<()> {
 /// The whole of `bytes` into `file` from byte `at`, by `seek_write`s, looping on a short
 /// one (and an interrupted one). The Unix arm says why every append is positional.
 #[cfg(windows)]
-fn write_all_at(file: &File, mut bytes: &[u8], mut at: u64) -> io::Result<()> {
+pub(crate) fn write_all_at(file: &File, mut bytes: &[u8], mut at: u64) -> io::Result<()> {
     use std::os::windows::fs::FileExt;
     while !bytes.is_empty() {
         match file.seek_write(bytes, at) {
@@ -547,6 +582,7 @@ pub(crate) struct FlushHandle {
 
 enum HandleBacking {
     Os(Arc<File>),
+    Seg(crate::segments::Out),
     #[cfg(any(test, debug_assertions))]
     Sim(crate::sim_device::Sim),
 }
@@ -559,6 +595,11 @@ impl FlushHandle {
         }
         match &self.backing {
             HandleBacking::Os(f) => astream_sys::full_sync_data(f),
+            HandleBacking::Seg(o) => {
+                astream_sys::full_sync_data(&o.file)?;
+                o.flushed();
+                Ok(())
+            }
             #[cfg(any(test, debug_assertions))]
             HandleBacking::Sim(s) => {
                 s.full_flush();
@@ -607,6 +648,7 @@ impl BatchOut {
     pub(crate) fn write_at(&self, bytes: &[u8], at: u64) -> io::Result<()> {
         match &self.0 {
             HandleBacking::Os(f) => write_all_at(f, bytes, at),
+            HandleBacking::Seg(o) => o.write_at(bytes, at),
             #[cfg(any(test, debug_assertions))]
             HandleBacking::Sim(s) => {
                 s.write_at(at, bytes);
@@ -621,6 +663,7 @@ impl BatchOut {
     pub(crate) fn write_at_cursor(&self, bytes: &[u8]) -> io::Result<()> {
         match &self.0 {
             HandleBacking::Os(f) => (&**f).write_all(bytes),
+            HandleBacking::Seg(o) => (&*o.file).write_all(bytes),
             HandleBacking::Sim(s) => {
                 s.write_at_cursor(bytes);
                 Ok(())
@@ -632,6 +675,11 @@ impl BatchOut {
     pub(crate) fn sync_data(&self) -> io::Result<()> {
         match &self.0 {
             HandleBacking::Os(f) => astream_sys::full_sync_data(f),
+            HandleBacking::Seg(o) => {
+                astream_sys::full_sync_data(&o.file)?;
+                o.flushed();
+                Ok(())
+            }
             #[cfg(any(test, debug_assertions))]
             HandleBacking::Sim(s) => {
                 s.full_flush();
@@ -644,6 +692,7 @@ impl BatchOut {
     pub(crate) fn barrier(&self) -> io::Result<()> {
         match &self.0 {
             HandleBacking::Os(f) => astream_sys::barrier_sync(f),
+            HandleBacking::Seg(o) => astream_sys::barrier_sync(&o.file),
             #[cfg(any(test, debug_assertions))]
             HandleBacking::Sim(s) => {
                 s.barrier();
@@ -658,6 +707,7 @@ impl BatchOut {
     pub(crate) fn is_of(&self, file: &Backing) -> bool {
         match (&self.0, file) {
             (HandleBacking::Os(out), Backing::Os(f)) => Arc::ptr_eq(out, f),
+            (HandleBacking::Seg(out), Backing::Seg(s)) => Arc::ptr_eq(&out.file, s.active_file()),
             _ => false,
         }
     }

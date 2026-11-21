@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Verified program-response speculation `P̂` (`docs/THEORY-deterministic-sessions.md` §3,
-//! `docs/ROADMAP.md` "a predictor `P̂` for program responses").
+//! a predictor for program responses).
 //!
 //! Where [`crate::Predictor`] predicts only cooked-mode ASCII-printable glyphs and
 //! abstains on control bytes, escape sequences, and alternate-screen TUIs,

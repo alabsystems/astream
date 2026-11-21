@@ -2,9 +2,9 @@
 // Copyright 2026 Andrew Yates
 
 //! Evidence claim exit-masking shell-operator refusal & per-claim timeout classifier
-//! (`docs/AUDIT-2026-09.md` lines 36, 51, 90; `Astream.Evidence.TlaEvidenceShellMetacharGuard`).
+//! (`Astream.Evidence.TlaEvidenceShellMetacharGuard`).
 //!
-//! Enforces the falsifiability rule from `AUDIT-2026-09.md` line 36:
+//! Enforces the falsifiability rule:
 //! - A claim command containing shell exit-masking or chaining operators (`||`, `&&`, `;`, `|`,
 //!   `&`, leading `!`, command substitution, or shell interpreter flags `-c`) MUST be refused by
 //!   both `gate` and `run` so a failing command (`... || true`) can never silently pass,

@@ -3,7 +3,7 @@
 
 //! Verified classic-BPF (`cBPF`) `seccomp-bpf` 5-syscall pre-filter compiler, deterministic
 //! `seccomp_data` virtual machine, and full syscall-neutralization replay state machine
-//! (`docs/ROADMAP.md` §4, `Astream.Host.TlaSeccompFilter`).
+//! (`Astream.Host.TlaSeccompFilter`).
 //!
 //! Zero `unsafe`: compiled across all Unix targets (`macOS` and `Linux`) so `make ci` verifies
 //! the exact `struct sock_filter` bytecode, `AUDIT_ARCH_*` enforcement, `SECCOMP_RET_TRACE`

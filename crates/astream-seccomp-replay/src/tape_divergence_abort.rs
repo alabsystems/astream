@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Fail-closed tape divergence abort latch (`docs/ROADMAP.md` §4: *"a short, wrong-kind or
-//! diverged tape aborts the replay"*, `Astream.SecReplay.TlaTapeDivergenceAbort`).
+//! Fail-closed tape divergence abort latch: a short, wrong-kind or diverged tape aborts the replay
+//! (`Astream.SecReplay.TlaTapeDivergenceAbort`).
 
 #[cfg(clean_islands)]
 #[path = "tape_divergence_abort_island.rs"]

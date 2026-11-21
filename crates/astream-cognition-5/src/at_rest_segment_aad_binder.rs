@@ -4,7 +4,7 @@
 //! At-rest AEAD log-position & `LogIdentity` AAD binder
 //! (`Astream.Aead.TlaAtRestSegmentAadBinder`).
 //!
-//! Closes the at-rest encryption AAD log-binding gap (`docs/AUDIT-2026-09.md`): binds every
+//! Closes the at-rest encryption AAD log-binding gap: binds every
 //! encrypted WAL frame's AEAD Additional Authenticated Data (`[u8; 32]`) to `(lineage_tag,
 //! segment_base_offset, frame_seq, payload_len)`, rejecting out-of-order, replayed, or
 //! cross-segment spliced ciphertext frames before plaintext release.

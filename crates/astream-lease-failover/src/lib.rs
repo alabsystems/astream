@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Autonomous lease-heartbeat replica failover daemon (`docs/ROADMAP.md` §3): leader lease TTL expiry clock, quorum witness ballot counter, epoch-fenced automatic replica promotion, zombie-leader stale-epoch write fence, divergent-tail truncation point, and follower catch-up lag admission gate. forbid(unsafe_code).
+//! Autonomous lease-heartbeat replica failover daemon: leader lease TTL expiry clock, quorum witness ballot counter, epoch-fenced automatic replica promotion, zombie-leader stale-epoch write fence, divergent-tail truncation point, and follower catch-up lag admission gate. forbid(unsafe_code).
 
 #![forbid(unsafe_code)]
 

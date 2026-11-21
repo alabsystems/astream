@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Deterministic, fuel-metered, zero-dependency WebAssembly MVP sandbox over [`EffectSeam`]
-//! (`docs/ROADMAP.md` §2 "WASM").
+//! Deterministic, fuel-metered, zero-dependency WebAssembly MVP sandbox over
+//! [`EffectSeam`].
 //!
 //! Executes pure WebAssembly binary modules (`\0asm\x01\0\0\0`) deterministically inside
 //! `astream-effects` with zero third-party dependencies and zero `unsafe`:

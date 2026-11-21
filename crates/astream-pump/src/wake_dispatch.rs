@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Agent wake-hook formatters, socket dispatchers, and broker task-queue adapters
-//! (`DESIGN-drive-pipe.md` §5 step 4, `docs/ROADMAP.md` §5, `Astream.Pump.TlaWakeDispatch`).
+//! (`DESIGN-drive-pipe.md` §5 step 4, `Astream.Pump.TlaWakeDispatch`).
 //!
 //! Bridges [`crate::Pump`] / `aspump` wake boundaries (`PROMPT_READY`, `COMMAND_START`,
 //! `COMMAND_END`, `QUIESCED`) into turn-based drivers that stop between turns:

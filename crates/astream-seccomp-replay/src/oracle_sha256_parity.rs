@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Independent SHA-256 replay-vs-oracle stdout digest parity verifier (`docs/ROADMAP.md` §4:
-//! *"replayed with no real syscall reaching the kernel, to a byte-identical digest equal to an
-//! independent oracle over the taped values"*, `Astream.SecReplay.TlaOracleSha256Parity`).
+//! Independent SHA-256 replay-vs-oracle stdout digest parity verifier: a replay with no real
+//! syscall reaching the kernel yields a byte-identical digest equal to an independent oracle over
+//! the taped values (`Astream.SecReplay.TlaOracleSha256Parity`).
 
 #![allow(
     clippy::manual_map,

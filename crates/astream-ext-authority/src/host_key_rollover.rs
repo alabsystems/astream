@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Dual-slot overlapping Ed25519 host-key rollover state machine (`docs/ROADMAP.md` §1: *"and the
-//! key operations around it: distribution and rotation"*) preserving handshake continuity during
-//! overlap windows (`Astream.ExtAuth.TlaHostKeyRollover`).
+//! Dual-slot overlapping Ed25519 host-key rollover state machine for the key operations around
+//! an external identity authority (distribution and rotation), preserving handshake continuity
+//! during overlap windows (`Astream.ExtAuth.TlaHostKeyRollover`).
 
 #![allow(
     clippy::manual_map,

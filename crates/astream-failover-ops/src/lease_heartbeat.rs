@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! CRC-framed `ALHB\x01` leader lease heartbeat wire codec and deterministic follower
-//! failover detector (`ROADMAP.md` line 106, `DESIGN-aterm-fabric.md` §15 line 4075,
+//! failover detector (`DESIGN-aterm-fabric.md` §15, `broker.replicated-failover-matrix`,
 //! `Astream.Failover.TlaLeaseHeartbeat`).
 //!
 //! Wraps leader lease heartbeats inside [`astream_wire::Frame`] (`CRC-32/IEEE`) carrying
@@ -240,7 +240,7 @@ impl HeartbeatLeaseTracker {
     }
 
     /// Evaluates a periodic daemon tick at `now_mono_ms`; returns `true` iff the follower
-    /// should trigger autonomous candidate election (`ROADMAP.md` line 106).
+    /// should trigger autonomous candidate election.
     pub fn poll_election_due(&mut self, now_mono_ms: u64) -> bool {
         if !lease_hb_expired(now_mono_ms, self.expiry_mono_ms) {
             self.missed_ticks = 0;

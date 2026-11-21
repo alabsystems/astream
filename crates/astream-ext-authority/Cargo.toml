@@ -1,6 +1,6 @@
 [package]
 name = "astream-ext-authority"
-description = "An independent model of an external identity authority (`docs/ROADMAP.md` §1): SSH-agent certificate validity chain, OIDC JWT `nbf`/`exp` claims window, overlapping host-key rollover, peer allowlist epoch reload, certificate revocation serial check, and principal key rotation ledger; no astream runtime crate and no aterm code calls it. astream ships no external identity authority: the roadmap item is open. forbid(unsafe_code)."
+description = "An independent model of an external identity authority: SSH-agent certificate validity chain, OIDC JWT `nbf`/`exp` claims window, overlapping host-key rollover, peer allowlist epoch reload, certificate revocation serial check, and principal key rotation ledger; no astream runtime crate and no aterm code calls it. The shipped external identity authority is `astream-aead`'s `cert.rs`. forbid(unsafe_code)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

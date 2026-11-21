@@ -867,7 +867,7 @@ fn aspump_does_not_buffer_the_stream_while_its_reader_stalls() {
 }
 
 /// End-to-end drive-pipe composition and crash recovery (`DESIGN-drive-pipe.md` §9 Rung 1,
-/// §10; `ROADMAP.md` §The drive pipe):
+/// §10):
 /// Composes a real PTY child under `astream-host::Driver` (`Pty::spawn`,
 /// `Driver::drive_input`, `Driver::read_and_record_chunk`), `astream-engine::Envelope`
 /// over a live `astream-broker::Broker` (`/a/stream/term/<sid>/in` and `.../out`), and
@@ -1113,7 +1113,7 @@ fn drive_pipe_e2e_crash_recovery_misses_nothing_and_dedups_pty_input() {
     );
 }
 
-/// Rung 3 (`DESIGN-drive-pipe.md` §9 Rung 3, `docs/ROADMAP.md` §The drive pipe):
+/// Rung 3 (`DESIGN-drive-pipe.md` §9 Rung 3):
 /// `--profile repl` and `--profile emacs` drive live non-agent programs over the
 /// bus without false-waking on settled intermediate progress lines ending in `%` or `#`.
 #[cfg(unix)]

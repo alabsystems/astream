@@ -9,9 +9,13 @@
 //! and durably stores the full record BEFORE acknowledging it. Rebuild on restart.
 //! Inventory is a set of digests, including forks: a sequence watermark alone hides
 //! two signed records at the same sequence. No clocks, network, retention or I/O.
+//! The index reads its retained headers through [`Headers`], so they may live in memory
+//! ([`Retained`]) or in a store the integrator keeps.
 
+use std::borrow::Cow;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::OnceLock;
 
 /// A paged Merkle map whose shape is a pure function of its rows, addressed by [`rbsr::Range`].
 pub mod map;
@@ -21,6 +25,10 @@ pub mod rbsr;
 pub mod reach;
 /// A set of entries under one 2,048-byte hash that adds and removes an entry in constant time.
 pub mod sethash;
+/// Heads, pending records, quarantined actors and actor tips, kept as each header arrives.
+pub mod tracker;
+
+pub use tracker::{Link, Tip, Tracked, Tracker, Wait};
 
 /// SHA-256 content identity, computed and verified by the integrating application.
 pub type Digest = [u8; 32];
@@ -69,7 +77,15 @@ pub enum Refusal {
         /// The bytes this record would take ([`Header::bytes`]).
         needed: u64,
     },
+    /// The store could not retain the record ([`Headers::put`] answered [`Unwritten`]): the
+    /// index holds nothing new, and the store reports its own cause. Do not acknowledge this
+    /// record.
+    Unwritten,
 }
+
+/// A store's answer to a header it could not retain ([`Headers::put`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Unwritten;
 
 // The Clean island, out of line: only a Trust compiler lexes it, so it mounts under
 // `cfg(clean_islands)` (build.rs) and a stock compiler never opens the file.
@@ -206,14 +222,176 @@ impl Fork {
     }
 }
 
+/// The retained headers an [`Index`] reads and adds to.
+///
+/// A store answers only from what it has verified: one that finds its own data damaged refuses
+/// to open rather than answer, so every read here is infallible. Headers are immutable by id, so
+/// a header read once is the header under that id for the store's life.
+pub trait Headers {
+    /// The retained header under `id`.
+    fn header(&self, id: &Digest) -> Option<Cow<'_, Header>>;
+
+    /// Whether a header is retained under `id`.
+    fn contains(&self, id: &Digest) -> bool {
+        self.header(id).is_some()
+    }
+
+    /// The id of a header retained at (`actor`, `sequence`). Where several are retained there,
+    /// the store names one, and once it has named one for a dot it names that one for its life:
+    /// a header retained there later does not replace it.
+    fn at(&self, actor: &Actor, sequence: u64) -> Option<Digest>;
+
+    /// Every retained id naming `id` as a parent, each once, in no stated order. `id` need not
+    /// be retained.
+    fn children(&self, id: &Digest) -> impl Iterator<Item = Digest> + '_;
+
+    /// Every retained header, ascending by id.
+    fn headers(&self) -> impl Iterator<Item = Cow<'_, Header>> + '_;
+
+    /// Every retained id, ascending.
+    fn ids(&self) -> impl Iterator<Item = Digest> + '_ {
+        self.headers().map(|header| header.id)
+    }
+
+    /// The number of retained headers.
+    fn len(&self) -> usize;
+
+    /// Whether no header is retained.
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Retain `header`, whose id is not retained.
+    ///
+    /// # Errors
+    /// [`Unwritten`] when the store could not retain it (a failed write); the store then holds
+    /// nothing new.
+    fn put(&mut self, header: Header) -> Result<(), Unwritten>;
+}
+
+/// Retained headers in memory, by id. The maps by dot ([`Headers::at`]) and by each parent
+/// named ([`Headers::children`]) are built from the records on their first read and kept up to
+/// date after it, so a store nobody asks them of holds only its records.
+#[derive(Clone, Debug, Default)]
+pub struct Retained {
+    records: BTreeMap<Digest, Header>,
+    /// One header retained at each (actor, sequence): the least id there when the map was
+    /// built, and the first retained there after.
+    chains: OnceLock<BTreeMap<(Actor, u64), Digest>>,
+    /// For each id named as a parent, the retained ids naming it.
+    children: OnceLock<BTreeMap<Digest, Vec<Digest>>>,
+}
+
+impl Retained {
+    /// An empty store.
+    #[must_use]
+    pub const fn new() -> Self {
+        Self {
+            records: BTreeMap::new(),
+            chains: OnceLock::new(),
+            children: OnceLock::new(),
+        }
+    }
+
+    /// The map by dot, built on its first read.
+    fn chains(&self) -> &BTreeMap<(Actor, u64), Digest> {
+        self.chains.get_or_init(|| {
+            let mut chains = BTreeMap::new();
+            for header in self.records.values() {
+                chains
+                    .entry((header.actor, header.sequence))
+                    .or_insert(header.id);
+            }
+            chains
+        })
+    }
+
+    /// The map by each parent named, built on its first read.
+    fn named(&self) -> &BTreeMap<Digest, Vec<Digest>> {
+        self.children.get_or_init(|| {
+            let mut children = BTreeMap::<Digest, Vec<Digest>>::new();
+            for header in self.records.values() {
+                for parent in &header.parents {
+                    children.entry(*parent).or_default().push(header.id);
+                }
+            }
+            children
+        })
+    }
+
+    /// The retained header under `id`, borrowed.
+    #[must_use]
+    pub fn get(&self, id: &Digest) -> Option<&Header> {
+        self.records.get(id)
+    }
+
+    /// Every retained header, borrowed, ascending by id.
+    pub fn values(&self) -> std::collections::btree_map::Values<'_, Digest, Header> {
+        self.records.values()
+    }
+
+    /// Every retained id, borrowed, ascending.
+    pub fn keys(&self) -> std::collections::btree_map::Keys<'_, Digest, Header> {
+        self.records.keys()
+    }
+}
+
+impl Headers for Retained {
+    fn header(&self, id: &Digest) -> Option<Cow<'_, Header>> {
+        self.records.get(id).map(Cow::Borrowed)
+    }
+
+    fn contains(&self, id: &Digest) -> bool {
+        self.records.contains_key(id)
+    }
+
+    fn at(&self, actor: &Actor, sequence: u64) -> Option<Digest> {
+        self.chains().get(&(*actor, sequence)).copied()
+    }
+
+    fn children(&self, id: &Digest) -> impl Iterator<Item = Digest> + '_ {
+        self.named().get(id).into_iter().flatten().copied()
+    }
+
+    fn headers(&self) -> impl Iterator<Item = Cow<'_, Header>> + '_ {
+        self.records.values().map(Cow::Borrowed)
+    }
+
+    fn ids(&self) -> impl Iterator<Item = Digest> + '_ {
+        self.records.keys().copied()
+    }
+
+    fn len(&self) -> usize {
+        self.records.len()
+    }
+
+    fn put(&mut self, header: Header) -> Result<(), Unwritten> {
+        if let Some(chains) = self.chains.get_mut() {
+            chains
+                .entry((header.actor, header.sequence))
+                .or_insert(header.id);
+        }
+        if let Some(children) = self.children.get_mut() {
+            for parent in &header.parents {
+                children.entry(*parent).or_default().push(header.id);
+            }
+        }
+        self.records.insert(header.id, header);
+        Ok(())
+    }
+}
+
 /// Rebuildable causal index for ONE dataset/audience generation, bounded by a byte budget.
 ///
 /// The budget counts the records held above the floor ([`Header::bytes`] each) and nothing below
 /// it: a floor record ([`Index::insert_floor`]) takes no bytes whatever its past, and a header
 /// the floor already holds is an identical duplicate. No record count bounds the index.
+///
+/// The retained headers live in `S` ([`Headers`]); [`Retained`] holds them in memory.
 #[derive(Clone, Debug)]
-pub struct Index {
-    records: BTreeMap<Digest, Header>,
+pub struct Index<S = Retained> {
+    /// The retained headers.
+    records: S,
     /// Each retained actor's highest retained sequence, kept at insert ([`Index::frontier`]).
     frontier: BTreeMap<Actor, u64>,
     /// The stated budget, in bytes ([`Index::with_budget`]).
@@ -222,6 +400,9 @@ pub struct Index {
     held: u64,
     /// Records a checkpoint stands for ([`Index::insert_floor`]), apart from `records`.
     floor: BTreeMap<Digest, FloorRecord>,
+    /// The projection's heads, pending records, quarantine and tips: built from the store on
+    /// the first read ([`Index::tracker`]) and fed each new record after it.
+    tracker: OnceLock<Tracker>,
 }
 
 /// A record at the boundary of a checkpoint's cut, admitted on the checkpoint's word rather than
@@ -245,14 +426,14 @@ pub struct FloorRecord {
 /// refusals while collecting one accepted batch. Only distinct new headers occupy
 /// borrowed scratch space; retained history is neither cloned nor modified.
 /// Authentication and application policy remain the caller's obligations.
-pub struct Proposal<'index, 'headers> {
-    index: &'index Index,
+pub struct Proposal<'index, 'headers, S = Retained> {
+    index: &'index Index<S>,
     proposed: BTreeMap<Digest, &'headers Header>,
     /// The bytes of `proposed`, so `index.held + bytes` stays within the budget.
     bytes: u64,
 }
 
-impl<'headers> Proposal<'_, 'headers> {
+impl<'headers, S: Headers> Proposal<'_, 'headers, S> {
     /// Check one verified header, retaining its metadata hint on a new admission.
     /// `false` is an identical duplicate. A refusal reserves no room and leaves
     /// earlier accepted proposals intact. This never reserves room in the
@@ -263,14 +444,13 @@ impl<'headers> Proposal<'_, 'headers> {
         if !header.is_shaped() {
             return Err(Refusal::Shape);
         }
-        let old = self
-            .proposed
-            .get(&header.id)
-            .copied()
-            .or_else(|| self.index.held_header(&header.id));
-        let accepted = Index::admit_shaped(
+        let old = match self.proposed.get(&header.id) {
+            Some(proposed) => Some(Cow::Borrowed(*proposed)),
+            None => self.index.held_header(&header.id),
+        };
+        let accepted = admit_shaped(
             header,
-            old,
+            old.as_deref(),
             self.index.held.saturating_add(self.bytes),
             self.index.budget,
         )?;
@@ -558,9 +738,15 @@ impl Projection {
     /// whose record lies below the floor. Answered from the version vectors where `later` has a
     /// row, else by walking `later`'s retained parents to the records with a row.
     #[must_use]
-    pub fn reaches(&self, index: &Index, later: &Digest, actor: &Actor, sequence: u64) -> bool {
+    pub fn reaches<S: Headers>(
+        &self,
+        index: &Index<S>,
+        later: &Digest,
+        actor: &Actor,
+        sequence: u64,
+    ) -> bool {
         let vectors = &self.vectors;
-        let mut todo = vec![*later];
+        let mut todo = Vec::from([*later]);
         let mut visited = BTreeSet::new();
         while let Some(id) = todo.pop() {
             if !visited.insert(id) {
@@ -572,7 +758,7 @@ impl Projection {
                 }
                 continue;
             }
-            match index.records.get(&id) {
+            match index.records.header(&id) {
                 Some(header) if header.actor == *actor && header.sequence >= sequence => {
                     return true;
                 }
@@ -591,23 +777,23 @@ impl Projection {
     /// with a row, whose vector answers for everything below it. `index` must be the
     /// index this projection came from, or one that retains more.
     #[must_use]
-    pub fn observes(&self, index: &Index, later: &Digest, earlier: &Digest) -> bool {
+    pub fn observes<S: Headers>(&self, index: &Index<S>, later: &Digest, earlier: &Digest) -> bool {
         let vectors = &self.vectors;
         if let Some(row) = vectors.rows.get(later) {
             return vectors.covers(*row, earlier);
         }
-        if !index.records.contains_key(later) {
+        if !index.records.contains(later) {
             return false;
         }
         let earlier_discharged = vectors.rows.contains_key(earlier);
-        let mut todo = vec![*later];
+        let mut todo = Vec::from([*later]);
         let mut visited = BTreeSet::new();
         while let Some(id) = todo.pop() {
             if !visited.insert(id) {
                 continue;
             }
             if &id == earlier {
-                return index.records.contains_key(earlier) || index.floor.contains_key(earlier);
+                return index.records.contains(earlier) || index.floor.contains_key(earlier);
             }
             if let Some(row) = vectors.rows.get(&id) {
                 if earlier_discharged && vectors.covers(*row, earlier) {
@@ -615,7 +801,7 @@ impl Projection {
                 }
                 continue;
             }
-            if let Some(header) = index.records.get(&id) {
+            if let Some(header) = index.records.header(&id) {
                 todo.extend(&header.parents);
             }
         }
@@ -623,18 +809,96 @@ impl Projection {
     }
 }
 
-impl Index {
+impl Index<Retained> {
     /// Empty index that holds records above its floor within `budget` bytes ([`Header::bytes`]
-    /// each). The integrator also bounds payload bytes.
+    /// each), in memory. The integrator also bounds payload bytes.
     #[must_use]
     pub const fn with_budget(budget: u64) -> Self {
         Self {
-            records: BTreeMap::new(),
+            records: Retained::new(),
             frontier: BTreeMap::new(),
             budget,
             held: 0,
             floor: BTreeMap::new(),
+            tracker: OnceLock::new(),
         }
+    }
+
+    /// Every retained digest, including pending records and fork evidence.
+    pub fn inventory(&self) -> impl Iterator<Item = &Digest> {
+        self.records.keys()
+    }
+
+    /// Header by exact content identity.
+    pub fn get(&self, id: &Digest) -> Option<&Header> {
+        self.records.get(id)
+    }
+}
+
+/// Whether `header`, shaped, is admitted beside `old` (what is held under its id) and `held`
+/// bytes under `budget`: `false` for an identical duplicate.
+fn admit_shaped(
+    header: &Header,
+    old: Option<&Header>,
+    held: u64,
+    budget: u64,
+) -> Result<bool, Refusal> {
+    if let Some(old) = old {
+        return if old == header {
+            Ok(false)
+        } else {
+            Err(Refusal::DigestCollision)
+        };
+    }
+    let needed = header.bytes();
+    if !sync_fits_budget(held, needed, budget) {
+        return Err(Refusal::Capacity {
+            budget,
+            held,
+            needed,
+        });
+    }
+    Ok(true)
+}
+
+impl<S: Headers> Index<S> {
+    /// An index over the headers `store` already retains, within `budget` bytes, with no floor,
+    /// reading every header once and holding none of them. A store that holds more than `budget`
+    /// bytes leaves every new record refused as [`Refusal::Capacity`].
+    #[must_use]
+    pub fn with_store(store: S, budget: u64) -> Self {
+        let mut frontier = BTreeMap::<Actor, u64>::new();
+        let mut held = 0_u64;
+        for header in store.headers() {
+            held = held.saturating_add(header.bytes());
+            let highest = frontier.entry(header.actor).or_insert(0);
+            *highest = (*highest).max(header.sequence);
+        }
+        Self {
+            records: store,
+            frontier,
+            budget,
+            held,
+            floor: BTreeMap::new(),
+            tracker: OnceLock::new(),
+        }
+    }
+
+    /// The store of retained headers.
+    #[must_use]
+    pub const fn store(&self) -> &S {
+        &self.records
+    }
+
+    /// The retained header under `id`.
+    #[must_use]
+    pub fn header(&self, id: &Digest) -> Option<Cow<'_, Header>> {
+        self.records.header(id)
+    }
+
+    /// Every retained id, ascending, including pending records and fork evidence.
+    pub fn ids(&self) -> impl Iterator<Item = Digest> + '_ {
+        self.records.ids()
     }
 
     /// The stated budget, in bytes.
@@ -651,10 +915,14 @@ impl Index {
     }
 
     /// The header held under `id`, retained or as a floor record.
-    fn held_header(&self, id: &Digest) -> Option<&Header> {
-        self.records
-            .get(id)
-            .or_else(|| self.floor.get(id).map(|record| &record.header))
+    fn held_header(&self, id: &Digest) -> Option<Cow<'_, Header>> {
+        match self.records.header(id) {
+            Some(header) => Some(header),
+            None => match self.floor.get(id) {
+                Some(record) => Some(Cow::Borrowed(&record.header)),
+                None => None,
+            },
+        }
     }
 
     /// Admit `record` as a floor record ([`FloorRecord`]). `false` when the index already holds
@@ -672,7 +940,7 @@ impl Index {
         {
             return Err(Refusal::Shape);
         }
-        if let Some(held) = self.records.get(&record.header.id) {
+        if let Some(held) = self.records.header(&record.header.id) {
             return if *held == record.header {
                 Ok(false)
             } else {
@@ -683,7 +951,11 @@ impl Index {
             Entry::Occupied(old) if *old.get() == record => Ok(false),
             Entry::Occupied(_) => Err(Refusal::DigestCollision),
             Entry::Vacant(slot) => {
+                let id = record.header.id;
                 slot.insert(record);
+                if let Some(tracker) = self.tracker.get_mut() {
+                    tracker.floor_inserted(&self.records, &self.floor, &id);
+                }
                 Ok(true)
             }
         }
@@ -706,13 +978,18 @@ impl Index {
         if !header.is_shaped() {
             return Err(Refusal::Shape);
         }
-        Self::admit_shaped(header, self.held_header(&header.id), self.held, self.budget)
+        admit_shaped(
+            header,
+            self.held_header(&header.id).as_deref(),
+            self.held,
+            self.budget,
+        )
     }
 
     /// Start a borrowed admission proposal without reserving or cloning history.
     /// Its headers must remain available while the proposal is used.
     #[must_use]
-    pub fn proposal<'headers>(&self) -> Proposal<'_, 'headers> {
+    pub fn proposal<'headers>(&self) -> Proposal<'_, 'headers, S> {
         Proposal {
             index: self,
             proposed: BTreeMap::new(),
@@ -742,69 +1019,39 @@ impl Index {
         Ok(proposal.new_records())
     }
 
-    fn admit_shaped(
-        header: &Header,
-        old: Option<&Header>,
-        held: u64,
-        budget: u64,
-    ) -> Result<bool, Refusal> {
-        if let Some(old) = old {
-            return if old == header {
-                Ok(false)
-            } else {
-                Err(Refusal::DigestCollision)
-            };
-        }
-        let needed = header.bytes();
-        if !sync_fits_budget(held, needed, budget) {
-            return Err(Refusal::Capacity {
-                budget,
-                held,
-                needed,
-            });
-        }
-        Ok(true)
-    }
-
     /// Insert a verified header. `false` is an identical duplicate, retained or a floor record,
     /// and takes no bytes.
     ///
     /// # Errors
-    /// [`Refusal`] names malformed headers, digest collisions and an exhausted budget.
+    /// [`Refusal`] names malformed headers, digest collisions, an exhausted budget and a store
+    /// that could not retain the header ([`Refusal::Unwritten`]); each leaves the index as it
+    /// was.
     pub fn insert(&mut self, header: Header) -> Result<bool, Refusal> {
         if !header.is_shaped() {
             return Err(Refusal::Shape);
         }
-        if let Some(record) = self.floor.get(&header.id) {
-            return Self::admit_shaped(&header, Some(&record.header), self.held, self.budget);
-        }
-        // One search of `records`. The entry holds the map, so the held bytes are read
-        // first; a vacant entry left unfilled changes nothing.
-        let (held, budget) = (self.held, self.budget);
-        match self.records.entry(header.id) {
-            Entry::Occupied(old) => Self::admit_shaped(&header, Some(old.get()), held, budget),
-            Entry::Vacant(slot) => {
-                let accepted = Self::admit_shaped(&header, None, held, budget)?;
-                if accepted {
-                    // Admitted within the budget, so the sum never saturates.
-                    self.held = held.saturating_add(header.bytes());
-                    let highest = self.frontier.entry(header.actor).or_insert(0);
-                    *highest = (*highest).max(header.sequence);
-                    slot.insert(header);
-                }
-                Ok(accepted)
+        let accepted = admit_shaped(
+            &header,
+            self.held_header(&header.id).as_deref(),
+            self.held,
+            self.budget,
+        )?;
+        if accepted {
+            let (id, actor, sequence, bytes) =
+                (header.id, header.actor, header.sequence, header.bytes());
+            // The store first: a write it refuses changes nothing here.
+            self.records
+                .put(header)
+                .map_err(|Unwritten| Refusal::Unwritten)?;
+            // Admitted within the budget, so the sum never saturates.
+            self.held = self.held.saturating_add(bytes);
+            let highest = self.frontier.entry(actor).or_insert(0);
+            *highest = (*highest).max(sequence);
+            if let Some(tracker) = self.tracker.get_mut() {
+                tracker.inserted(&self.records, &self.floor, &id);
             }
         }
-    }
-
-    /// Every retained digest, including pending records and fork evidence.
-    pub fn inventory(&self) -> impl Iterator<Item = &Digest> {
-        self.records.keys()
-    }
-
-    /// Header by exact content identity.
-    pub fn get(&self, id: &Digest) -> Option<&Header> {
-        self.records.get(id)
+        Ok(accepted)
     }
 
     /// Each retained actor's highest retained sequence, kept at insert, so a peer's
@@ -822,39 +1069,39 @@ impl Index {
     /// Applications can transfer authenticated source records as restrictive
     /// evidence without treating their payloads as authorized operations.
     /// [`forks_of`] answers the same over borrowed headers, with no index built.
+    ///
+    /// It reads every header once, one at a time, to find the forked actors by each header's
+    /// own dot and the dot below it (`tracker::forks_below`), and holds only those actors'
+    /// headers to choose each witness.
     pub fn forks(&self) -> BTreeMap<Actor, Fork> {
-        let mut retained = self.records.values();
-        let (Some(first), Some(second)) = (retained.next(), retained.next()) else {
-            return BTreeMap::new();
-        };
-        // `records` iterates in id order, so these are the globally least retained
-        // sources. If they contradict and all sources have this actor, no other pair can
-        // improve the witness. This shortcut reads that order, which `forks_of`'s input
-        // does not have; the scan below reads no order.
-        if let Some(fork) = Fork::between(first, second)
-            .filter(|_| retained.all(|header| header.actor == first.actor))
-        {
-            return BTreeMap::from([(first.actor, fork)]);
+        let forked = tracker::forked_actors(&self.records);
+        let mut held: Vec<Cow<'_, Header>> = Vec::new();
+        if !forked.is_empty() {
+            for header in self.records.headers() {
+                if forked.contains(&header.actor) {
+                    held.push(header);
+                }
+            }
         }
-        forks_by_actor(&mut self.records.values().collect::<Vec<_>>())
+        forks_by_actor(&mut held.iter().map(|header| &**header).collect::<Vec<_>>())
     }
 
     /// Whether `later` transitively names `earlier` as a dependency. Equality is
     /// reflexive only for a retained record. Missing history never proves observation.
     pub fn observes(&self, later: &Digest, earlier: &Digest) -> bool {
-        if !self.records.contains_key(later) {
+        if !self.records.contains(later) {
             return false;
         }
-        let mut todo = vec![*later];
+        let mut todo = Vec::from([*later]);
         let mut visited = BTreeSet::new();
         while let Some(id) = todo.pop() {
             if !visited.insert(id) {
                 continue;
             }
             if &id == earlier {
-                return self.records.contains_key(earlier);
+                return self.records.contains(earlier);
             }
-            if let Some(header) = self.records.get(&id) {
+            if let Some(header) = self.records.header(&id) {
                 todo.extend(&header.parents);
             }
         }
@@ -868,7 +1115,7 @@ impl Index {
     #[must_use]
     pub fn ancestors(&self, id: &Digest) -> BTreeSet<Digest> {
         let mut found = BTreeSet::new();
-        let Some(header) = self.records.get(id) else {
+        let Some(header) = self.records.header(id) else {
             return found;
         };
         let mut todo = header.parents.clone();
@@ -876,7 +1123,7 @@ impl Index {
             if parent == *id {
                 continue;
             }
-            let Some(header) = self.records.get(&parent) else {
+            let Some(header) = self.records.header(&parent) else {
                 continue;
             };
             if found.insert(parent) {
@@ -890,6 +1137,25 @@ impl Index {
     /// Never incrementally accept a winner based on which branch arrived first.
     pub fn project(&self) -> Projection {
         self.project_excluding(&BTreeSet::new())
+    }
+
+    /// The projection's heads, pending records, quarantined actors and actor tips: equal to
+    /// [`Index::project`] on those fields, read without projecting. The first read builds the
+    /// tracker from the store and the floor, reading every header once; from then on the index
+    /// feeds it each record it admits. An index whose tracker is never read keeps none.
+    pub fn tracker(&self) -> &Tracker {
+        self.tracker
+            .get_or_init(|| Tracker::rebuild(&self.records, &self.floor))
+    }
+
+    /// The tracked fields under `excluded`: equal to [`Index::project_excluding`] on them. It
+    /// works out the withdrawal of each discharged excluded record and every discharged record
+    /// above one beside the tracker, without copying it, so it costs what it withdraws; floor
+    /// ids and ids not retained in `excluded` change nothing, as in the projection.
+    #[must_use]
+    pub fn tracked_excluding(&self, excluded: &BTreeSet<Digest>) -> Tracked<'_> {
+        self.tracker()
+            .excluding(&self.records, &self.floor, excluded)
     }
 
     /// Derive a projection under deterministic application policy exclusions.
@@ -928,17 +1194,13 @@ impl Index {
         let mut waiting = BTreeMap::<Digest, u64>::new();
         let mut children = BTreeMap::<Digest, Vec<Digest>>::new();
         let mut ready = BTreeSet::new();
-        for header in self.records.values() {
+        for header in self.records.headers() {
             out.pending.insert(header.id);
             if out.quarantined.contains(&header.actor) || excluded.contains(&header.id) {
                 continue;
             }
             if let Some(previous) = header.previous {
-                let Some(parent) = self
-                    .records
-                    .get(&previous)
-                    .or_else(|| self.floor.get(&previous).map(|record| &record.header))
-                else {
+                let Some(parent) = self.held_header(&previous) else {
                     continue;
                 };
                 if parent.actor != header.actor
@@ -964,11 +1226,11 @@ impl Index {
             out.pending.remove(&id);
             out.ordered.push(id);
             out.heads.insert(id);
-            if let Some(header) = self.records.get(&id) {
+            if let Some(header) = self.records.header(&id) {
                 for parent in &header.parents {
                     out.heads.remove(parent);
                 }
-                out.vectors.discharge(header);
+                out.vectors.discharge(&header);
             }
             for child in children.get(&id).into_iter().flatten() {
                 if let Some(count) = waiting.get_mut(child) {

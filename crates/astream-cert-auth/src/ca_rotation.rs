@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Dual-root CA trust bundle rollover and retired-authority grace-horizon fence
-//! (`ROADMAP.md` lines 12-14, `Astream.CertAuth.TlaCaRotation`).
+//! (`Astream.CertAuth.TlaCaRotation`).
 //!
 //! Enables zero-downtime rotation of Ed25519 SSH/identity CAs across fleets:
 //! - `Active` roots verify newly issued and existing certificates unconditionally.

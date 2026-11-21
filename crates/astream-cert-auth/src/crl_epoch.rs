@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Monotone-revision certificate-serial and principal revocation list (`CRL`) ledger
-//! (`ROADMAP.md` lines 12-14, `cap.expiry-enforced`, `Astream.CertAuth.TlaCrlEpoch`).
+//! (`cap.expiry-enforced`, `Astream.CertAuth.TlaCrlEpoch`).
 
 use std::collections::BTreeSet;
 

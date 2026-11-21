@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Distinct-subject budget & `Request::Retire` protocol (`docs/ROADMAP.md` §2): `max_subjects_per_producer` quota meter, `last_owner` carried-charge authorization, live/durable will target retirement blocker, `COMMIT_TAG_RETIRE` (`u64::MAX`) marker validator, `PendingRetire` visible-head overlay, and uncarried-cut retirement refusal. forbid(unsafe_code).
+//! Distinct-subject budget & `Request::Retire` protocol: `max_subjects_per_producer` quota meter, `last_owner` carried-charge authorization, live/durable will target retirement blocker, `COMMIT_TAG_RETIRE` (`u64::MAX`) marker validator, `PendingRetire` visible-head overlay, and uncarried-cut retirement refusal. forbid(unsafe_code).
 
 #![forbid(unsafe_code)]
 

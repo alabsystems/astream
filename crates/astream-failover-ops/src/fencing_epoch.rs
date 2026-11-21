@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Monotone `(epoch, op_seq)` Kleppmann fencing-token issuer and zombie-leader write barrier
-//! (`ROADMAP.md` line 106, `Astream.Failover.TlaFencingEpoch`).
+//! (`Astream.Failover.TlaFencingEpoch`).
 //!
 //! Guarantees split-brain immunity across arbitrary GC pauses or network partitions:
 //! - Every promoted leader mints fencing tokens under its strictly higher `epoch`.

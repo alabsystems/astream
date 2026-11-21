@@ -4,7 +4,7 @@
 //! optional `ShardedBroker`-backed `DurableKafkaStore`, and live TCP [`KafkaServer`] /
 //! [`KafkaClient`].
 //!
-//! Answers the doctrine's ecosystem-maturity bridge: speak standard non-flexible Kafka
+//! A bridge to the Kafka ecosystem's clients: speak standard non-flexible Kafka
 //! protocol frames byte-for-byte with zero third-party dependencies and `#![forbid(unsafe_code)]`.
 //!
 //! Supported API surface (12 APIs, non-flexible + KIP-482 flexible bootstrap/discovery):

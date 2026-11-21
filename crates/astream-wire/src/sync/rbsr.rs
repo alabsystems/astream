@@ -242,7 +242,8 @@ impl Snapshot {
     /// disables the affected actor's prefix optimization.
     #[must_use]
     pub fn from_inventory(ids: BTreeSet<Digest>, index: &Index) -> Self {
-        let forks = index.forks();
+        // `forks_of` over the borrowed headers: the same answer as `Index::forks`.
+        let forks = super::forks_of(index.records.values());
         let mut actors = BTreeMap::<Actor, BTreeMap<u64, &super::Header>>::new();
         let mut unprefixed = BTreeSet::new();
         let mut known = index.records.values().peekable();

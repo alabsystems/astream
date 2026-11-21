@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! RFC 6298 Jacobson/Karels integer SRTT + RTTVAR estimator and lowest-cost cross-region
-//! gateway selector (`ROADMAP.md` line 124, `Astream.Mesh.TlaRegionRtt`).
+//! gateway selector (`Astream.Mesh.TlaRegionRtt`).
 //!
 //! Uses pure unsigned integer bit-shifts (`>> 3` for `1/8`, `>> 2` for `1/4`) with zero
 //! floating-point non-determinism across platforms, clamps hostile RTT spikes via Clean-origin

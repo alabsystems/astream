@@ -2,7 +2,7 @@
 // Copyright 2026 Andrew Yates
 
 //! Closed-vocabulary vendor agent hook & task-queue adapter (`astream` drive pipe §5)
-//! (`docs/ROADMAP.md` lines 237–238, `docs/DESIGN-aterm-fabric.md` §8.4, §13 line 3823;
+//! (`docs/DESIGN-aterm-fabric.md` §8.4, §13;
 //! `Astream.Agent.TlaVendorTaskQueueHookAdapter`).
 //!
 //! Translates vendor-specific agent lifecycle hooks (Claude Code `PreToolUse` / `Stop` /

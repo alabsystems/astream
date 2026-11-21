@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Seccomp-BPF foreign-process deterministic record/replay (`docs/ROADMAP.md` §4): `SECCOMP_RET_TRACE` 5-syscall pre-filter mask, replay-time syscall no-op neutralization gate, taped return/buffer injector, `PTRACE_TRACEME` single-thread `execve` lineage, short/wrong-kind tape abort latch, and independent SHA-256 oracle parity check. forbid(unsafe_code).
+//! Seccomp-BPF foreign-process deterministic record/replay: `SECCOMP_RET_TRACE` 5-syscall pre-filter mask, replay-time syscall no-op neutralization gate, taped return/buffer injector, `PTRACE_TRACEME` single-thread `execve` lineage, short/wrong-kind tape abort latch, and independent SHA-256 oracle parity check. forbid(unsafe_code).
 
 #![forbid(unsafe_code)]
 

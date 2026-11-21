@@ -14,3 +14,5 @@ mod router_differential;
 mod steps;
 #[path = "suite/summary.rs"]
 mod summary;
+#[path = "suite/sync_memory.rs"]
+mod sync_memory;

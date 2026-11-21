@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: Apache-2.0
 // Copyright 2026 Andrew Yates
 
-//! Per-producer distinct-subject budget meter (`docs/ROADMAP.md` §2: *"Giving a distinct-subject
-//! budget back. A producer can tell it is at its budget (`ERR_SUBJECT_BOUND`), read the count
-//! (`Request::Budget`), and retire an exact subject"*, `Astream.SubjRet.TlaProducerSubjectQuota`).
+//! Per-producer distinct-subject budget meter: a producer can tell it is at its budget
+//! (`ERR_SUBJECT_BOUND`), read the count (`Request::Budget`), and retire an exact subject to give
+//! a distinct-subject budget back (`Astream.SubjRet.TlaProducerSubjectQuota`).
 
 #[cfg(clean_islands)]
 #[path = "producer_subject_quota_island.rs"]

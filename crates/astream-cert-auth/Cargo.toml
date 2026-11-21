@@ -1,6 +1,6 @@
 [package]
 name = "astream-cert-auth"
-description = "An independent model of external-authority cryptographic identity binding: OpenSSH ssh-ed25519-cert-v01@openssh.com validity and serial verification, OIDC claim mapping, dual-root CA rotation, CRL epochs, principal namespaces, and PoA delegation; no astream runtime crate and no aterm code calls it. astream ships no external identity authority: it is an open item of `docs/ROADMAP.md`'s Transport and identity section. forbid(unsafe_code)."
+description = "An independent model of external-authority cryptographic identity binding: OpenSSH ssh-ed25519-cert-v01@openssh.com validity and serial verification, OIDC claim mapping, dual-root CA rotation, CRL epochs, principal namespaces, and PoA delegation; no astream runtime crate and no aterm code calls it. The shipped external identity authority is `astream-aead`'s `cert.rs`. forbid(unsafe_code)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
